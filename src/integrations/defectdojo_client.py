@@ -256,7 +256,8 @@ class DefectDojoClient:
 
         with file_path.open("rb") as f:
             LOG.info(
-                "Import/reimport via reimport-scan: product='%s' engagement='%s' test='%s' scan_type='%s'",
+                "Import/reimport via reimport-scan: "
+                "product='%s' engagement='%s' test='%s' scan_type='%s'",
                 product_name,
                 engagement_name,
                 test_title,

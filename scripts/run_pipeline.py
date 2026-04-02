@@ -249,9 +249,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
                 dojo_findings.append(
                     {
                         "title": str(f.get("title", "")),
-                        "severity": str(
-                            f.get("composite_severity") or f.get("severity", "Info")
-                        ),
+                        "severity": str(f.get("composite_severity") or f.get("severity", "Info")),
                         "description": str(f.get("description", "")),
                         "date": _date.today().isoformat(),
                         "cve": str(f.get("cve") or ""),
