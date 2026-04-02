@@ -48,7 +48,7 @@ def test_url_strips_trailing_and_handles_leading_slash() -> None:
     assert client._url("engagements/") == "http://example.com/api/v2/engagements/"
 
 
-def test_get_or_create_product_returns_existing_id_when_results_non_empty(tmp_path: Path) -> None:
+def test_get_or_create_product_returns_existing_id_when_results_non_empty() -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     with (
         patch.object(client.session, "get") as mock_get,
@@ -61,7 +61,7 @@ def test_get_or_create_product_returns_existing_id_when_results_non_empty(tmp_pa
         assert mock_post.call_count == 0
 
 
-def test_get_or_create_product_posts_and_returns_new_id_when_results_empty(tmp_path: Path) -> None:
+def test_get_or_create_product_posts_and_returns_new_id_when_results_empty() -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     with (
         patch.object(client.session, "get") as mock_get,
@@ -124,23 +124,20 @@ def test_find_test_returns_none_when_results_empty() -> None:
         assert client.find_test(engagement_id=1, title="t", scan_type="scan") is None
 
 
-def test_import_scan_calls_import_scan_endpoint_when_find_test_returns_none(tmp_path: Path) -> None:
+def test_import_scan_posts_to_reimport_scan_with_auto_create_context(
+    tmp_path: Path,
+) -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     artifact = _write_dummy_file(tmp_path)
-    with (
-        patch.object(client.session, "get") as mock_get,
-        patch.object(client.session, "post") as mock_post,
-    ):
-        # find_test => no results
-        mock_get.return_value = _make_response({"results": []})
 
-        # import-scan/ => returns test_import
+    with patch.object(client.session, "post") as mock_post:
         mock_post.return_value = _make_response(
             {"test_import": {"findings_affected": {"created": 1}}}
         )
 
         client.import_scan(
-            engagement_id=1,
+            product_name="p",
+            engagement_name="e",
             scan_type="Nmap Scan",
             file_path=artifact,
             test_title="t",
@@ -148,26 +145,34 @@ def test_import_scan_calls_import_scan_endpoint_when_find_test_returns_none(tmp_
         )
 
         called_url = mock_post.call_args[0][0]
-        assert "/import-scan/" in called_url
+        posted_data = mock_post.call_args.kwargs["data"]
+
+        assert "/reimport-scan/" in called_url
+        assert posted_data["product_name"] == "p"
+        assert posted_data["engagement_name"] == "e"
+        assert posted_data["test_title"] == "t"
+        assert posted_data["scan_type"] == "Nmap Scan"
+        assert posted_data["auto_create_context"] == "true"
+        assert posted_data["environment"] == "Development"
+        assert posted_data["minimum_severity"] == "Info"
+        assert posted_data["active"] == "true"
+        assert posted_data["verified"] == "true"
+        assert posted_data["close_old_findings"] == "true"
+        assert posted_data["do_not_reactivate"] == "false"
 
 
-def test_import_scan_calls_reimport_scan_endpoint_when_find_test_returns_existing_id(
-    tmp_path: Path,
-) -> None:
+def test_import_scan_uses_reimport_scan_for_recurring_uploads(tmp_path: Path) -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     artifact = _write_dummy_file(tmp_path)
-    with (
-        patch.object(client.session, "get") as mock_get,
-        patch.object(client.session, "post") as mock_post,
-    ):
-        # find_test => existing id
-        mock_get.return_value = _make_response({"results": [{"id": 5}]})
+
+    with patch.object(client.session, "post") as mock_post:
         mock_post.return_value = _make_response(
             {"test_import": {"findings_affected": {"created": 1}}}
         )
 
         client.import_scan(
-            engagement_id=1,
+            product_name="p",
+            engagement_name="e",
             scan_type="Nmap Scan",
             file_path=artifact,
             test_title="t",
@@ -178,47 +183,46 @@ def test_import_scan_calls_reimport_scan_endpoint_when_find_test_returns_existin
         assert "/reimport-scan/" in called_url
 
 
-def test_import_tool_results_raises_defectdojoerror_for_unknown_tool_key(tmp_path: Path) -> None:
+def test_import_scan_raises_when_file_does_not_exist(tmp_path: Path) -> None:
+    client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
+    missing = tmp_path / "missing.bin"
+
+    with pytest.raises(DefectDojoError, match="Import file does not exist"):
+        client.import_scan(
+            product_name="p",
+            engagement_name="e",
+            scan_type="Nmap Scan",
+            file_path=missing,
+            test_title="t",
+        )
+
+
+def test_import_tool_results_raises_defectdojoerror_for_unknown_tool_key(
+    tmp_path: Path,
+) -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     artifact = _write_dummy_file(tmp_path)
-    with (
-        patch.object(client.session, "get") as _mock_get,
-        patch.object(client.session, "post") as _mock_post,
-    ):
-        with pytest.raises(DefectDojoError):
-            client.import_tool_results(
-                product_name="p",
-                engagement_name="e",
-                tool="unknown_tool",
-                file_path=artifact,
-                environment="Development",
-            )
+    with pytest.raises(DefectDojoError):
+        client.import_tool_results(
+            product_name="p",
+            engagement_name="e",
+            tool="unknown_tool",
+            file_path=artifact,
+            environment="Development",
+        )
 
 
-def test_import_tool_results_completes_successfully_for_known_tool_zap(tmp_path: Path) -> None:
+def test_import_tool_results_completes_successfully_for_known_tool_zap(
+    tmp_path: Path,
+) -> None:
     client = DefectDojoClient(base_url="http://example.com/", api_token="tkn")
     artifact = _write_dummy_file(tmp_path)
 
-    def _get_side_effect(
-        url: str, params: dict[str, Any] | None = None, timeout: int | None = None
-    ) -> MagicMock:
-        # Route based on URL endpoint
-        if url.endswith("/products/"):
-            return _make_response({"results": [{"id": 1}]})
-        if url.endswith("/engagements/"):
-            return _make_response({"results": [{"id": 2}]})
-        if url.endswith("/tests/"):
-            return _make_response({"results": []})
-        return _make_response({"results": []})
-
-    with (
-        patch.object(client.session, "get", side_effect=_get_side_effect) as _mock_get,
-        patch.object(
-            client.session,
-            "post",
-            return_value=_make_response({"test_import": {"findings_affected": {"created": 1}}}),
-        ) as mock_post,
-    ):
+    with patch.object(
+        client.session,
+        "post",
+        return_value=_make_response({"test_import": {"findings_affected": {"created": 1}}}),
+    ) as mock_post:
         client.import_tool_results(
             product_name="p",
             engagement_name="e",
@@ -227,6 +231,12 @@ def test_import_tool_results_completes_successfully_for_known_tool_zap(tmp_path:
             environment="Development",
         )
 
-        # For zap we expect first import (find_test returns None => import-scan/)
         called_url = mock_post.call_args[0][0]
-        assert "/import-scan/" in called_url
+        posted_data = mock_post.call_args.kwargs["data"]
+
+        assert "/reimport-scan/" in called_url
+        assert posted_data["scan_type"] == "ZAP Scan"
+        assert posted_data["product_name"] == "p"
+        assert posted_data["engagement_name"] == "e"
+        assert posted_data["test_title"] == "zap - recurring"
+        assert posted_data["environment"] == "Development"
