@@ -22,13 +22,20 @@ def _empty_jsonl() -> str:
 
 
 def _has_templates(path: Path) -> bool:
-    if not path.exists() or not path.is_dir():
+    try:
+        if not path.is_dir():
+            return False
+
+        for file_path in path.rglob("*"):
+            try:
+                if file_path.is_file() and file_path.suffix.lower() in {".yaml", ".yml"}:
+                    return True
+            except (PermissionError, OSError):
+                continue
+    except (PermissionError, OSError):
         return False
-    return any(
-        file_path.suffix.lower() in {".yaml", ".yml"}
-        for file_path in path.rglob("*")
-        if file_path.is_file()
-    )
+
+    return False
 
 
 def _severity_range(max_severity: str) -> str:
@@ -43,10 +50,11 @@ def _dedupe_paths(paths: list[Path]) -> list[Path]:
     seen: set[str] = set()
     unique: list[Path] = []
     for path in paths:
-        resolved = str(path.expanduser())
+        expanded = path.expanduser()
+        resolved = str(expanded)
         if resolved not in seen:
             seen.add(resolved)
-            unique.append(path.expanduser())
+            unique.append(expanded)
     return unique
 
 
@@ -98,9 +106,8 @@ class NucleiRunner(BaseRunner):
 
     def _resolve_template_dir(self) -> Path | None:
         for candidate in self._candidate_template_dirs():
-            expanded = candidate.expanduser()
-            if _has_templates(expanded):
-                return expanded
+            if _has_templates(candidate):
+                return candidate
         return None
 
     def _ensure_templates(self, nuclei_exe: str) -> Path | None:
@@ -128,6 +135,8 @@ class NucleiRunner(BaseRunner):
         return self._resolve_template_dir()
 
     def execute(self, targets: list[str], output_dir: Path) -> list[Path]:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         out = output_dir / f"nuclei_{self.context.run_metadata.run_id}.jsonl"
         out.write_text(_empty_jsonl(), encoding="utf-8")
 
@@ -154,7 +163,6 @@ class NucleiRunner(BaseRunner):
                 "'nuclei -update-templates'."
             )
 
-        output_dir.mkdir(parents=True, exist_ok=True)
         target_file = output_dir / "targets.txt"
         target_file.write_text("\n".join(targets), encoding="utf-8")
 
