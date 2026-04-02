@@ -26,7 +26,7 @@ phases:
   - name: web_checks
     enabled: true #false  Only enable if you have the resources to run these checks
     allowed_environments: [staging, lab]
-    runners: [zap, nikto]
+    runners: [zap, nikto, nuclei]
 
   - name: cloud_posture
     enabled: true
