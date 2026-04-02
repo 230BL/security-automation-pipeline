@@ -1,7 +1,8 @@
 """Core data models for the pipeline.
 
-All models use dataclasses with explicit types. Factory methods validate
-required fields and raise ScopeManifestError on missing or invalid data.
+All models use dataclasses with explicit types.
+Factory methods validate required fields and raise ScopeManifestError on
+missing or invalid data.
 """
 
 from __future__ import annotations
@@ -86,6 +87,7 @@ class AssetClass:
         for key in required:
             if key not in data:
                 raise ScopeManifestError(f"Asset class missing field: {key}")
+
         allowed_tools = data["allowed_tools"]
         if not isinstance(allowed_tools, list) or not all(
             isinstance(x, str) for x in allowed_tools
@@ -114,6 +116,9 @@ class AssetClass:
         targets.extend(self.accounts)
         if self.tenant_id:
             targets.append(self.tenant_id)
+        targets.extend(
+            str(web_ctx.url).strip() for web_ctx in self.web_contexts if str(web_ctx.url).strip()
+        )
         return targets
 
 
@@ -225,6 +230,7 @@ class ScopeManifest:
     def from_yaml(cls, path: Path) -> ScopeManifest:
         if not path.exists():
             raise ScopeManifestError(f"Scope manifest not found: {path}")
+
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             raise ScopeManifestError("Scope manifest is not a valid YAML mapping")
@@ -248,9 +254,11 @@ class ScopeManifest:
         targets = data["targets"]
         if not isinstance(targets, dict):
             raise ScopeManifestError("targets must be a mapping")
+
         window = data["assessment_window"]
         if not isinstance(window, dict):
             raise ScopeManifestError("assessment_window must be a mapping")
+
         exclusions = data.get("exclusions", {})
         if exclusions is None:
             exclusions = {}

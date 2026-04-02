@@ -78,6 +78,36 @@ def _runner_map() -> dict[str, Any]:
     }
 
 
+def _is_web_target(target: str) -> bool:
+    value = str(target).strip().lower()
+    return value.startswith("http://") or value.startswith("https://")
+
+
+def _dedupe_targets(targets: list[str]) -> list[str]:
+    seen: set[str] = set()
+    unique: list[str] = []
+    for target in targets:
+        value = str(target).strip()
+        if not value:
+            continue
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value)
+    return unique
+
+
+def _collect_runner_targets(ctx: Any, runner_name: str) -> list[str]:
+    base_targets = _dedupe_targets(list(ctx.validated_targets))
+    web_targets = [target for target in base_targets if _is_web_target(target)]
+
+    if runner_name in {"zap", "nikto", "nuclei"}:
+        return web_targets
+
+    return [target for target in base_targets if not _is_web_target(target)]
+
+
 def _parse_artifacts(tool: str, artifacts: list[Path]) -> list[Any]:
     findings = []
     for a in artifacts:
@@ -124,6 +154,7 @@ def _map_defectdojo_environment(environment: str) -> str:
 def main(profile: Path, dry_run: bool = False) -> int:
     profile_cfg = _load_yaml(profile)
     run_profile = profile_cfg.get("run_profile", profile_cfg)
+
     workflow = str(run_profile.get("name", "lab_poc"))
     environment = str(run_profile.get("environment", "lab"))
 
@@ -152,12 +183,15 @@ def main(profile: Path, dry_run: bool = False) -> int:
     norm_dir.mkdir(parents=True, exist_ok=True)
 
     all_findings = []
+
     for phase in profile_cfg.get("phases", []):
         if not phase.get("enabled", False):
             continue
+
         phase_name = str(phase["name"])
         if state.is_complete(phase_name):
             continue
+
         state.mark_started(phase_name)
 
         allowed_envs = phase.get("allowed_environments")
@@ -167,18 +201,20 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
         phase_out = raw_dir / phase_name
         phase_out.mkdir(parents=True, exist_ok=True)
-
         artifacts_all: list[str] = []
+
         for runner_name in phase.get("runners", []):
-            runner_cls = _runner_map().get(str(runner_name))
+            runner_name_str = str(runner_name)
+            runner_cls = _runner_map().get(runner_name_str)
             if runner_cls is None:
-                raise RuntimeError(f"Unknown runner: {runner_name}")
+                raise RuntimeError(f"Unknown runner: {runner_name_str}")
 
             runner = runner_cls(ctx, tools_cfg)
-            out_dir = phase_out / str(runner_name)
-            artifacts = runner.run(ctx.validated_targets, out_dir)
+            out_dir = phase_out / runner_name_str
+            runner_targets = _collect_runner_targets(ctx, runner_name_str)
+            artifacts = runner.run(runner_targets, out_dir)
             artifacts_all += [str(p) for p in artifacts]
-            all_findings += _parse_artifacts(str(runner_name), artifacts)
+            all_findings += _parse_artifacts(runner_name_str, artifacts)
 
         state.mark_complete(phase_name, artifacts=artifacts_all)
 
@@ -186,8 +222,11 @@ def main(profile: Path, dry_run: bool = False) -> int:
     validate_batch(normalized)
 
     scored = score_batch(
-        normalized, asset_context=None, policy_path=ROOT / "policy" / "risk_policy.yml"
+        normalized,
+        asset_context=None,
+        policy_path=ROOT / "policy" / "risk_policy.yml",
     )
+
     if bool(profile_cfg.get("workflow", {}).get("deduplicate", True)):
         scored = deduplicate(scored)
 
@@ -263,11 +302,9 @@ def main(profile: Path, dry_run: bool = False) -> int:
                 "name": "Security Automation Pipeline",
                 "findings": dojo_findings,
             }
-
             import_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
             dojo_environment = _map_defectdojo_environment(environment)
-
             dojo.import_tool_results(
                 product_name=ctx.manifest.assessment_name,
                 engagement_name=workflow,

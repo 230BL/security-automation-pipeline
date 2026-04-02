@@ -1,85 +1,23 @@
-"""Parse Nikto JSON output into normalized Finding objects."""
+"""Parse Nikto text output into normalized Finding objects."""
 
 from __future__ import annotations
 
-import json
-import logging
+import re
 from pathlib import Path
 
 from src.parsers.models import Finding
 
-LOG = logging.getLogger(__name__)
+_LINE_PREFIX = re.compile(r"^\+\s+")
+_ITEM_COUNT = re.compile(
+    r"\+\s+\d+\s+items checked:\s+\d+\s+error\(s\)\s+and\s+\d+\s+item\(s\)\s+reported"
+)
+TARGET_HOST = re.compile(r"^\+\s+Target Host(?:name)?:\s*(.+)$")
+TARGET_IP = re.compile(r"^\+\s+Target IP:\s*(.+)$")
+TARGET_PORT = re.compile(r"^\+\s+Target Port:\s*(.+)$")
 
 
-def parse_nikto_json(path: Path) -> list[Finding]:
-    """Parse Nikto JSON report."""
-    if not path.exists():
-        LOG.warning("Nikto JSON file not found: %s", path)
-        return []
-
-    content = path.read_text(encoding="utf-8").strip()
-    if not content:
-        LOG.warning("Nikto JSON file is empty: %s", path)
-        return []
-
-    try:
-        data = json.loads(content)
-    except json.JSONDecodeError as exc:
-        LOG.error("Failed to parse Nikto JSON %s: %s", path, exc)
-        return []
-
-    findings: list[Finding] = []
-    hosts = data if isinstance(data, list) else [data]
-
-    for host_data in hosts:
-        if not isinstance(host_data, dict):
-            continue
-
-        host_ip = host_data.get("ip", host_data.get("host", "unknown"))
-        host_port = host_data.get("port", "")
-        target_host = host_data.get("host", host_ip)
-
-        vulns = host_data.get("vulnerabilities", [])
-        if not isinstance(vulns, list):
-            continue
-
-        for vuln in vulns:
-            if not isinstance(vuln, dict):
-                continue
-            try:
-                osvdb_id = vuln.get("OSVDB", vuln.get("id", ""))
-                method = vuln.get("method", "GET")
-                uri = vuln.get("url", vuln.get("uri", "/"))
-                description_raw = vuln.get("msg", vuln.get("message", ""))
-                description = str(description_raw or "")
-
-                severity = _estimate_severity(description, str(osvdb_id))
-
-                endpoint = f"{target_host}:{host_port}{uri}" if host_port else f"{target_host}{uri}"
-
-                findings.append(
-                    Finding(
-                        tool="nikto",
-                        asset_id=str(host_ip),
-                        endpoint=endpoint,
-                        title=f"Nikto: {description[:100]}" if description else f"OSVDB-{osvdb_id}",
-                        severity=severity,
-                        description=description,
-                        evidence=f"{method} {uri}",
-                        vuln_id=f"OSVDB-{osvdb_id}" if osvdb_id and str(osvdb_id) != "0" else None,
-                        tags=["web-server", "misconfiguration"],
-                    )
-                )
-            except Exception as exc:
-                LOG.warning("Skipping malformed Nikto vuln in %s: %s", path.name, exc)
-                continue
-
-    LOG.info("Parsed %d findings from Nikto JSON: %s", len(findings), path.name)
-    return findings
-
-
-def _estimate_severity(description: str, osvdb_id: str) -> str:
-    desc_lower = (description or "").lower()
+def _severity_from_text(text: str) -> str:
+    lower = text.lower()
 
     high_keywords = [
         "remote code",
@@ -94,28 +32,142 @@ def _estimate_severity(description: str, osvdb_id: str) -> str:
         "shell",
     ]
     medium_keywords = [
-        "xss",
-        "cross-site",
-        "clickjacking",
-        "csrf",
-        "information disclosure",
-        "directory listing",
-        "source code",
-        "backup file",
+        "phpinfo",
+        "phpmyadmin",
+        "directory indexing",
+        "directory is browsable",
+        "sensitive information",
+        "trace method is active",
+        "xst",
+        "debug http verb",
     ]
-    low_keywords = ["header", "cookie", "version", "banner", "deprecated", "outdated", "missing"]
+    low_keywords = [
+        "x-frame-options",
+        "cookie",
+        "etag",
+        "server leaks",
+        "allowed http methods",
+        "outdated",
+        "missing",
+        "header",
+        "banner",
+    ]
 
     for kw in high_keywords:
-        if kw in desc_lower:
+        if kw in lower:
             return "High"
     for kw in medium_keywords:
-        if kw in desc_lower:
+        if kw in lower:
             return "Medium"
     for kw in low_keywords:
-        if kw in desc_lower:
+        if kw in lower:
             return "Low"
-
-    if osvdb_id and osvdb_id != "0":
-        return "Low"
-
     return "Info"
+
+
+def _extract_vuln_id(text: str) -> str | None:
+    match = re.search(r"\bOSVDB-(\d+)\b", text)
+    if match:
+        return f"OSVDB-{match.group(1)}"
+    return None
+
+
+def parse_nikto_json(path: Path) -> list[Finding]:
+    content = path.read_text(encoding="utf-8", errors="replace")
+    if not content.strip():
+        return []
+
+    findings: list[Finding] = []
+    target_host = ""
+    target_ip = ""
+    target_port = ""
+
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        host_match = TARGET_HOST.match(line)
+        if host_match:
+            target_host = host_match.group(1).strip()
+            continue
+
+        ip_match = TARGET_IP.match(line)
+        if ip_match:
+            target_ip = ip_match.group(1).strip()
+            continue
+
+        port_match = TARGET_PORT.match(line)
+        if port_match:
+            target_port = port_match.group(1).strip()
+            continue
+
+        if not _LINE_PREFIX.match(line):
+            continue
+
+        if _ITEM_COUNT.match(line):
+            continue
+
+        if (
+            line.startswith("+ Target ")
+            or line.startswith("+ Start Time")
+            or line.startswith("+ End Time")
+        ):
+            continue
+
+        if line.startswith("+ Server:"):
+            text = line[2:].strip()
+            asset_id = target_ip or target_host or "unknown"
+            endpoint = (
+                f"{target_host or target_ip}:{target_port}"
+                if target_port
+                else (target_host or target_ip or None)
+            )
+            findings.append(
+                Finding(
+                    tool="nikto",
+                    asset_id=asset_id,
+                    endpoint=endpoint,
+                    title="Nikto: Server banner exposed",
+                    severity="Info",
+                    description=text,
+                    evidence=raw_line,
+                    tags=["web-server", "misconfiguration"],
+                )
+            )
+            continue
+
+        if line.startswith("+ "):
+            text = line[2:].strip()
+            asset_id = target_ip or target_host or "unknown"
+            endpoint = (
+                f"{target_host or target_ip}:{target_port}"
+                if target_port
+                else (target_host or target_ip or None)
+            )
+
+            findings.append(
+                Finding(
+                    tool="nikto",
+                    asset_id=asset_id,
+                    endpoint=endpoint,
+                    title=f"Nikto: {text[:100]}",
+                    severity=_severity_from_text(text),
+                    description=text,
+                    evidence=raw_line,
+                    vuln_id=_extract_vuln_id(text),
+                    tags=["web-server", "misconfiguration"],
+                )
+            )
+
+    deduped: list[Finding] = []
+    seen: set[tuple[str, str | None, str | None]] = set()
+
+    for item in findings:
+        key = (item.title, item.endpoint, item.vuln_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    return deduped
