@@ -1,0 +1,2 @@
+lynis_output_dir: /var/tmp/security-audit
+lynis_report_file: "{{ lynis_output_dir }}/lynis-report.dat"

@@ -1,0 +1,38 @@
+---
+- name: Collect key configuration files (Linux)
+  hosts: linux_servers
+  gather_facts: true
+  become: true
+
+  vars:
+    audit_output_dir: "{{ audit_output_dir | default('/var/tmp/security-audit') }}"
+    config_files:
+      - /etc/os-release
+      - /etc/ssh/sshd_config
+
+  tasks:
+    - name: Ensure audit output directory exists
+      file:
+        path: "{{ audit_output_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Read config files
+      slurp:
+        src: "{{ item }}"
+      register: slurped
+      loop: "{{ config_files }}"
+      failed_when: false
+      changed_when: false
+
+    - name: Write combined config snapshot
+      copy:
+        content: "{{ slurped.results | to_nice_json }}"
+        dest: "{{ audit_output_dir }}/configs.json"
+        mode: "0640"
+
+    - name: Fetch config snapshot
+      fetch:
+        src: "{{ audit_output_dir }}/configs.json"
+        dest: "evidence/raw/configs/{{ inventory_hostname }}/"
+        flat: false

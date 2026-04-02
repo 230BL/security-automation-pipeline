@@ -1,0 +1,28 @@
+{
+  "options": {
+    "config_plugin": "filesystem",
+    "logger_plugin": "filesystem",
+    "logger_path": "/var/log/osquery",
+    "disable_distributed": "true",
+    "disable_carver": "true",
+    "host_identifier": "hostname",
+    "utc": "true"
+  },
+  "schedule": {
+    "os_version": {
+      "query": "select name, version, build from os_version;",
+      "interval": 3600
+    },
+    "users": {
+      "query": "select username, uid, gid, directory, shell from users;",
+      "interval": 3600
+    },
+    "listening_ports": {
+      "query": "select * from listening_ports;",
+      "interval": 900
+    }
+  },
+  "packs": {
+    "compliance_pack": "{{ osquery_packs_dir }}/compliance_pack.conf"
+  }
+}

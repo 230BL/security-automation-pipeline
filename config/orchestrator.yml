@@ -1,0 +1,18 @@
+lab_mode: true
+
+scope:
+  manifest_path: scope/scope_manifest.yml
+  allowlist_path: scope/allowlist.txt
+  maintenance_windows_path: scope/maintenance_windows.yml
+  signature_keyring: scope/approved_signers.gpg
+
+vault:
+  mode: local  # local (Phase 1) or hashicorp (Phase 2+)
+  credentials_file: scope/credentials_map.yml
+
+outputs:
+  raw_dir: evidence/raw
+  normalized_dir: evidence/normalized
+  reports_dir: evidence/reports
+  state_dir: evidence/state
+  logs_dir: evidence/logs

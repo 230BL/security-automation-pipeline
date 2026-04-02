@@ -1,0 +1,2 @@
+{"template-id":"http-missing-hsts","info":{"name":"Missing HSTS","severity":"low","tags":["misconfig"],"description":"HSTS header not set"},"matched-at":"http://staging-app.local/","host":"staging-app.local","ip":"10.0.0.10"}
+

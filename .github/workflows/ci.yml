@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Ruff check
+        run: ruff check src/ tests/ scripts/
+
+      - name: Ruff format check
+        run: ruff format --check src/ tests/ scripts/
+
+  typecheck:
+    runs-on: ubuntu-24.04
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Mypy
+        run: mypy src/
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    needs: typecheck
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Pytest with coverage
+        run: |
+          pytest tests/unit/ --cov=src --cov-report=xml --cov-fail-under=80
+
+      - name: Upload coverage to Codecov
+        continue-on-error: true
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage.xml
+
+  gate-smoke:
+    runs-on: ubuntu-24.04
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Prepare example scope files
+        run: |
+          cp scope/scope_manifest.example.yml scope/scope_manifest.yml
+          cp scope/allowlist.example.txt scope/allowlist.txt
+
+      - name: Gate smoke (dry-run)
+        run: python scripts/run_pipeline.py --profile config/profiles/lab_poc.yml --dry-run
+
+  docker-build:
+    runs-on: ubuntu-24.04
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build orchestrator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: compose/Dockerfile.orchestrator
+          push: false
+          tags: orchestrator:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  audit:
+    runs-on: ubuntu-24.04
+    needs: unit-tests
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pip-audit
+
+      - name: pip-audit
+        run: pip-audit -r requirements.txt

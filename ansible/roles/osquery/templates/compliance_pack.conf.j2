@@ -1,0 +1,9 @@
+{
+  "queries": {
+    "ssh_config_perms": {
+      "query": "select path, mode, uid, gid from file where path='/etc/ssh/sshd_config';",
+      "interval": 3600,
+      "description": "Basic SSH config permission check"
+    }
+  }
+}

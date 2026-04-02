@@ -1,0 +1,17 @@
+[
+  {
+    "host": "staging-app.local",
+    "ip": "10.0.0.10",
+    "port": 80,
+    "vulnerabilities": [
+      {
+        "id": "1",
+        "OSVDB": "12345",
+        "method": "GET",
+        "url": "/",
+        "msg": "X-Frame-Options header is not present."
+      }
+    ]
+  }
+]
+

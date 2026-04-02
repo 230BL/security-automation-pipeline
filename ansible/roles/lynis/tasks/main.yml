@@ -1,0 +1,27 @@
+---
+- name: Ensure Lynis is installed
+  package:
+    name: lynis
+    state: present
+
+- name: Ensure output directory exists
+  file:
+    path: "{{ lynis_output_dir }}"
+    state: directory
+    mode: "0750"
+
+- name: Run Lynis audit
+  command: >
+    lynis audit system
+    --quiet
+    --no-colors
+    --report-file {{ lynis_report_file }}
+  register: lynis_result
+  changed_when: false
+  failed_when: lynis_result.rc > 1
+
+- name: Fetch Lynis report
+  fetch:
+    src: "{{ lynis_report_file }}"
+    dest: "evidence/raw/lynis/{{ inventory_hostname }}/"
+    flat: false

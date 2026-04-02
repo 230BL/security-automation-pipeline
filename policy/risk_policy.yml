@@ -1,0 +1,18 @@
+asset_criticality:
+  "dc01": 2.0
+  "ad.": 2.0
+  "identity": 1.8
+  "prod-db": 1.8
+  "vpn": 1.5
+  "mail": 1.5
+
+exposure_weights:
+  external: 2.0
+  dmz: 1.5
+  internal: 1.0
+  isolated: 0.5
+
+auth_confidence_weights:
+  agent: 1.0
+  authenticated: 0.95
+  unauthenticated: 0.7

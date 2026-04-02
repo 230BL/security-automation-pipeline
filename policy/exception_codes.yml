@@ -1,0 +1,16 @@
+codes:
+  FP-001:
+    label: "False positive — scanner artifact"
+    requires: [analyst_note, evidence, reviewer, expiry]
+  FP-002:
+    label: "False positive — compensating control"
+    requires: [analyst_note, evidence, reviewer, expiry, control_reference]
+  AR-001:
+    label: "Accepted risk — business decision"
+    requires: [analyst_note, evidence, reviewer, business_owner, expiry]
+  AR-002:
+    label: "Accepted risk — scheduled remediation"
+    requires: [analyst_note, evidence, reviewer, remediation_date]
+  DEF-001:
+    label: "Deferred — dependency on vendor"
+    requires: [analyst_note, evidence, reviewer, vendor_reference, expiry]

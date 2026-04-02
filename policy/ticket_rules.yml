@@ -1,0 +1,17 @@
+minimum_severity: Medium
+backend: file  # options: file, jira, servicenow
+
+sla_days:
+  Critical: 3
+  High: 7
+  Medium: 30
+  Low: 90
+  Info: 0
+
+default_owner: security-team@local
+
+owner_map:
+  "10.1.": "linux-team@acme.com"
+  "10.2.": "windows-team@acme.com"
+  "staging-app": "appdev-team@acme.com"
+  "aws": "cloud-team@acme.com"

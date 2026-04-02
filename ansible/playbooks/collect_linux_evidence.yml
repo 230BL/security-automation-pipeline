@@ -1,0 +1,57 @@
+---
+- name: Collect read-only evidence from Linux servers
+  hosts: linux_servers
+  gather_facts: true
+  become: true
+
+  vars:
+    audit_output_dir: "{{ audit_output_dir | default('/var/tmp/security-audit') }}"
+
+  tasks:
+    - name: Create audit output directory
+      file:
+        path: "{{ audit_output_dir }}"
+        state: directory
+        mode: "0750"
+
+    - name: Gather package facts
+      package_facts:
+        manager: auto
+
+    - name: Save package list
+      copy:
+        content: "{{ ansible_facts.packages | to_nice_json }}"
+        dest: "{{ audit_output_dir }}/packages.json"
+        mode: "0640"
+
+    - name: Gather listening ports
+      command: ss -tlnp
+      register: listening_ports
+      changed_when: false
+
+    - name: Save listening ports
+      copy:
+        content: "{{ listening_ports.stdout }}"
+        dest: "{{ audit_output_dir }}/listening_ports.txt"
+        mode: "0640"
+
+    - name: Gather user list
+      command: getent passwd
+      register: user_list
+      changed_when: false
+
+    - name: Save user list
+      copy:
+        content: "{{ user_list.stdout }}"
+        dest: "{{ audit_output_dir }}/users.txt"
+        mode: "0640"
+
+    - name: Fetch all audit artifacts
+      fetch:
+        src: "{{ audit_output_dir }}/{{ item }}"
+        dest: "evidence/raw/ansible/{{ inventory_hostname }}/"
+        flat: false
+      loop:
+        - packages.json
+        - listening_ports.txt
+        - users.txt

@@ -1,0 +1,54 @@
+tool_defaults:
+  nmap:
+    max_rate: 500
+    max_retries: 2
+    host_timeout: "300s"
+    max_parallelism: 10
+    timing_template: T3
+    global_timeout: 3600
+
+  nmap_safe_profile:
+    args: >-
+      -sS -sV --version-intensity 2
+      -T3 --max-rate {max_rate} --max-retries {max_retries}
+      --host-timeout {host_timeout}
+      -oX {output_path}
+      --excludefile {exclusion_file}
+      -iL {target_file}
+
+  greenbone:
+    max_concurrent_hosts: 5
+    max_concurrent_nvts: 4
+    network_timeout: 40
+    global_timeout: 14400
+
+  nikto:
+    max_parallelism: 3
+    timeout_per_host: 300
+    pause_between_requests_ms: 100
+    global_timeout: 3600
+
+  zap:
+    max_spider_duration_min: 10
+    max_ajax_spider_duration_min: 5
+    active_scan_threads: 2
+    delay_in_ms: 200
+    global_timeout: 7200
+
+  nuclei:
+    rate_limit: 50
+    bulk_size: 25
+    concurrency: 10
+    timeout: 10
+    global_timeout: 7200
+
+  prowler:
+    max_workers: 3
+    global_timeout: 21600
+
+  wazuh:
+    global_timeout: 300
+    verify_tls: false
+
+  osquery:
+    global_timeout: 300

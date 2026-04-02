@@ -1,0 +1,3 @@
+osquery_version: "{{ osquery_version | default('5.12.1') }}"
+osquery_conf_dir: /etc/osquery
+osquery_packs_dir: /usr/share/osquery/packs

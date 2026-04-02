@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "security-automation"
+version = "0.1.0"
+description = "Gated vulnerability-management pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6.0.1",
+    "jsonschema>=4.22.0",
+    "requests>=2.32.0",
+    "opensearch-py>=2.6.0",
+    "jinja2>=3.1.4",
+    "defusedxml>=0.7.1",
+    "python-dateutil>=2.9.0",
+    "cryptography>=42.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2.0",
+    "pytest-cov>=5.0.0",
+    "pytest-mock>=3.14.0",
+    "ruff>=0.4.0",
+    "mypy>=1.10.0",
+    "types-PyYAML>=6.0.0",
+    "types-requests>=2.32.0",
+    "types-python-dateutil>=2.9.0",
+    "types-jsonschema>=4.22.0",
+    "types-defusedxml>=0.7.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --tb=short --strict-markers"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "S", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101"] # tests use asserts as the primary assertion mechanism
+"tests/unit/test_defectdojo_client.py" = ["S106"] # dummy api_token in unit tests
+"tests/unit/test_vault_client.py" = ["S105", "S106"] # dummy vault credentials in unit tests
+"src/orchestrator/scope.py" = ["S603", "S607"] # subprocess calls are gated + executables resolved
+"src/runners/**" = ["S603", "S607"] # subprocess calls are gated + executables resolved
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true

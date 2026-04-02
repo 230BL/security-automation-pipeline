@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -sV 10.0.0.1">
+  <host>
+    <status state="up"/>
+    <address addr="10.0.0.1" addrtype="ipv4"/>
+    <hostnames><hostname name="server1.lab" type="PTR"/></hostnames>
+    <ports>
+      <port protocol="tcp" portid="22">
+        <state state="open"/>
+        <service name="ssh" product="OpenSSH" version="8.9p1"/>
+      </port>
+      <port protocol="tcp" portid="80">
+        <state state="open"/>
+        <service name="http" product="nginx"/>
+      </port>
+      <port protocol="tcp" portid="3306">
+        <state state="closed"/>
+        <service name="mysql"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

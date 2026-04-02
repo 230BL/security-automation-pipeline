@@ -1,0 +1,40 @@
+---
+- name: Ensure osquery is installed (Debian/Ubuntu)
+  apt:
+    name: osquery
+    state: present
+    update_cache: true
+  when: ansible_os_family == "Debian"
+
+- name: Ensure osquery is installed (RHEL/CentOS)
+  yum:
+    name: osquery
+    state: present
+  when: ansible_os_family == "RedHat"
+
+- name: Ensure osquery config directories exist
+  file:
+    path: "{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - "{{ osquery_conf_dir }}"
+    - "{{ osquery_packs_dir }}"
+
+- name: Deploy osquery.conf
+  template:
+    src: osquery.conf.j2
+    dest: "{{ osquery_conf_dir }}/osquery.conf"
+    mode: "0644"
+
+- name: Deploy compliance pack
+  template:
+    src: compliance_pack.conf.j2
+    dest: "{{ osquery_packs_dir }}/compliance_pack.conf"
+    mode: "0644"
+
+- name: Ensure osquery service is enabled and running
+  service:
+    name: osqueryd
+    state: started
+    enabled: true

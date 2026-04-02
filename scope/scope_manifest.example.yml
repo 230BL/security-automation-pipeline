@@ -1,0 +1,58 @@
+version: "1.0"
+organization: "Lab Environment"
+assessment_name: "Lab POC Validation"
+
+authorization:
+  signed_scope_pdf: "scope/signed_scope.pdf"
+  authorizing_official: "Lab Admin"
+  date_signed: "2025-01-01"
+  scope_hash_algorithm: "sha256"
+  scope_pdf_hash: "REPLACE_WITH_REAL_HASH"
+
+assessment_window:
+  maintenance_windows:
+    - name: lab_always
+      start: "2025-01-01T00:00:00+00:00"
+      end: "2030-12-31T23:59:59+00:00"
+
+targets:
+  allowlist_file: "scope/allowlist.txt"
+  max_target_count: 50
+  asset_classes:
+    - class: "lab_linux"
+      environment: "lab"
+      maintenance_window: "lab_always"
+      allowed_tools: ["nmap", "greenbone", "lynis", "wazuh", "osquery", "nikto", "zap", "nuclei"]
+      cidrs: ["192.168.56.0/24"]
+      hostnames: []
+
+exclusions:
+  cidrs: []
+  hostnames: []
+
+approved_workflows:
+  - "lab_poc"
+  - "weekly_defensive_validation"
+
+rules_of_engagement:
+  prohibited:
+    - "exploit_delivery"
+    - "privilege_escalation"
+    - "persistence"
+    - "lateral_movement"
+    - "destructive_testing"
+  max_concurrent_hosts_per_class: 5
+  stop_on_service_degradation: true
+  stop_on_scope_mismatch: true
+
+evidence_handling:
+  classification: "lab_internal"
+  retention_days: 90
+  encrypt_at_rest: false
+  redact_secrets: true
+  redact_pii: true
+
+emergency_contacts:
+  - name: "Lab Admin"
+    email: "admin@lab.local"
+    phone: "+1-555-0100"

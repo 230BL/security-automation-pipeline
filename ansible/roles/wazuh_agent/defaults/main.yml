@@ -1,0 +1,2 @@
+wazuh_manager: "{{ wazuh_manager | default('wazuh-manager.local') }}"
+wazuh_version: "{{ wazuh_version | default('4.8.0') }}"

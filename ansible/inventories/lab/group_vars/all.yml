@@ -1,0 +1,4 @@
+audit_output_dir: /var/tmp/security-audit
+wazuh_manager: wazuh-manager.lab.local
+wazuh_version: "4.8.0"
+osquery_version: "5.12.1"

@@ -1,0 +1,42 @@
+---
+- name: Collect basic evidence from Windows endpoints
+  hosts: windows_endpoints
+  gather_facts: false
+
+  vars:
+    audit_output_dir: C:\\Windows\\Temp\\security-audit
+
+  tasks:
+    - name: Ensure audit output directory exists
+      win_file:
+        path: "{{ audit_output_dir }}"
+        state: directory
+
+    - name: Collect installed hotfixes
+      win_shell: "Get-HotFix | ConvertTo-Json -Depth 4"
+      register: hotfixes
+      changed_when: false
+
+    - name: Save hotfixes
+      win_copy:
+        content: "{{ hotfixes.stdout }}"
+        dest: "{{ audit_output_dir }}\\hotfixes.json"
+
+    - name: Collect listening ports
+      win_shell: "netstat -ano"
+      register: netstat_out
+      changed_when: false
+
+    - name: Save listening ports
+      win_copy:
+        content: "{{ netstat_out.stdout }}"
+        dest: "{{ audit_output_dir }}\\netstat.txt"
+
+    - name: Fetch evidence artifacts
+      fetch:
+        src: "{{ audit_output_dir }}\\{{ item }}"
+        dest: "evidence/raw/windows/{{ inventory_hostname }}/"
+        flat: false
+      loop:
+        - hotfixes.json
+        - netstat.txt

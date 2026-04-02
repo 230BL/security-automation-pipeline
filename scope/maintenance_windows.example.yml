@@ -1,0 +1,5 @@
+windows:
+  - name: lab_always
+    start: "2025-01-01T00:00:00+00:00"
+    end: "2030-12-31T23:59:59+00:00"
+    asset_classes: [lab_linux]

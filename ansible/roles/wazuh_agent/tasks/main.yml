@@ -1,0 +1,30 @@
+---
+- name: Install Wazuh agent (Debian/Ubuntu)
+  apt:
+    deb: "https://packages.wazuh.com/4.x/apt/pool/main/w/wazuh-agent/wazuh-agent_{{ wazuh_version }}-1_amd64.deb"
+    state: present
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+  when: ansible_os_family == "Debian"
+
+- name: Install Wazuh agent (RHEL/CentOS)
+  yum:
+    name: "https://packages.wazuh.com/4.x/yum/wazuh-agent-{{ wazuh_version }}-1.x86_64.rpm"
+    state: present
+    disable_gpg_check: true
+  environment:
+    WAZUH_MANAGER: "{{ wazuh_manager }}"
+  when: ansible_os_family == "RedHat"
+
+- name: Deploy ossec.conf
+  template:
+    src: ossec.conf.j2
+    dest: /var/ossec/etc/ossec.conf
+    mode: "0640"
+  notify: Restart wazuh-agent
+
+- name: Start and enable Wazuh agent
+  service:
+    name: wazuh-agent
+    state: started
+    enabled: true

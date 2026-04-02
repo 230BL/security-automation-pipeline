@@ -1,0 +1,10 @@
+evidence:
+  raw_days: 90
+  normalized_days: 395
+  reports_days: 395
+  logs_days: 395
+
+opensearch:
+  findings_months: 18
+  runs_months: 24
+  metrics_months: 12

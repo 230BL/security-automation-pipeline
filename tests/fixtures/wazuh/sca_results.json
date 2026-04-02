@@ -1,0 +1,16 @@
+{
+  "data": {
+    "affected_items": [
+      {
+        "agent": {"name": "lab-linux-01"},
+        "id": "CIS-1.1",
+        "title": "Disable root login",
+        "result": "failed",
+        "rationale": "Root login should be disabled",
+        "remediation": "Set PermitRootLogin no",
+        "policy": {"name": "CIS Linux"}
+      }
+    ]
+  }
+}
+

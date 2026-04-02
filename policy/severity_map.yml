@@ -1,0 +1,16 @@
+mapping:
+  critical:
+    description: "Confirmed on high-value externally exposed or identity-tier asset"
+    sla_days: 3
+  high:
+    description: "Confirmed weakness on important asset with direct business impact"
+    sla_days: 7
+  medium:
+    description: "Confirmed but internally constrained or compensating controls present"
+    sla_days: 30
+  low:
+    description: "Hygiene or weak hardening with limited impact"
+    sla_days: 90
+  info:
+    description: "Inventory, observation, or advisory"
+    sla_days: 0

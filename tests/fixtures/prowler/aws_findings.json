@@ -1,0 +1,18 @@
+[
+  {
+    "Provider": "aws",
+    "AccountId": "123456789012",
+    "Region": "us-east-1",
+    "CheckID": "iam_root_mfa_enabled",
+    "CheckTitle": "Ensure MFA is enabled for the root account",
+    "Severity": "high",
+    "Status": "FAIL",
+    "StatusExtended": "Root account does not have MFA enabled",
+    "ResourceId": "root",
+    "ServiceName": "iam",
+    "Remediation": {
+      "Recommendation": {"Text": "Enable MFA for the root account."}
+    }
+  }
+]
+

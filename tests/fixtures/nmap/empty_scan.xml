@@ -1,0 +1,3 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap" args="nmap -sV 10.0.0.99">
+</nmaprun>

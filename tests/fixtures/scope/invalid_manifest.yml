@@ -1,0 +1,4 @@
+version: "1.0"
+organization: "Test Org"
+# assessment_name missing
+authorization: {}

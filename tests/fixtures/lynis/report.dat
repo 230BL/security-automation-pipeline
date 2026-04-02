@@ -1,0 +1,5 @@
+hostname=lab-linux-01
+os_name=Ubuntu
+warning[]=SSH-7408|SSH root login is permitted|Disable PermitRootLogin|m
+suggestion[]=PKGS-7392|Remove unused packages|Review installed packages|l
+

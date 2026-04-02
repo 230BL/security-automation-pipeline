@@ -1,0 +1,50 @@
+version: "1.0"
+organization: "Test Org"
+assessment_name: "Expired Window"
+
+authorization:
+  signed_scope_pdf: "scope/signed_scope.pdf"
+  authorizing_official: "Test Approver"
+  date_signed: "2025-01-01"
+  scope_hash_algorithm: "sha256"
+  scope_pdf_hash: "00"
+
+assessment_window:
+  maintenance_windows:
+    - name: expired
+      start: "2020-01-01T00:00:00+00:00"
+      end: "2020-01-02T00:00:00+00:00"
+
+targets:
+  allowlist_file: "scope/allowlist.txt"
+  max_target_count: 10
+  asset_classes:
+    - class: "lab_linux"
+      environment: "lab"
+      maintenance_window: "expired"
+      allowed_tools: ["nmap"]
+      cidrs: ["192.168.56.10"]
+
+exclusions:
+  cidrs: []
+  hostnames: []
+
+approved_workflows: ["lab_poc"]
+
+rules_of_engagement:
+  prohibited: []
+  max_concurrent_hosts_per_class: 5
+  stop_on_service_degradation: true
+  stop_on_scope_mismatch: true
+
+evidence_handling:
+  classification: "internal"
+  retention_days: 90
+  encrypt_at_rest: false
+  redact_secrets: true
+  redact_pii: true
+
+emergency_contacts:
+  - name: "Oncall"
+    email: "oncall@example.com"
+

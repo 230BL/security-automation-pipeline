@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OWASPZAPReport version="2.15.0">
+  <site name="http://staging-app.local" host="staging-app.local" port="80" ssl="false">
+    <alerts>
+      <alertitem>
+        <pluginid>10020</pluginid>
+        <alert>X-Frame-Options Header Not Set</alert>
+        <riskcode>1</riskcode>
+        <desc><![CDATA[Missing X-Frame-Options header.]]></desc>
+        <solution><![CDATA[Add X-Frame-Options: DENY or SAMEORIGIN.]]></solution>
+        <cweid>16</cweid>
+        <instances>
+          <instance>
+            <uri>http://staging-app.local/</uri>
+            <method>GET</method>
+            <evidence><![CDATA[]]></evidence>
+          </instance>
+        </instances>
+      </alertitem>
+    </alerts>
+  </site>
+</OWASPZAPReport>
+

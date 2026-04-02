@@ -1,0 +1,4 @@
+IP,Hostname,Port,NVT Name,CVSS,Severity,Summary,Solution,CVEs,NVT OID,Specific Result
+10.0.0.1,server1,22/tcp,SSH Weak Algo,5.3,Medium,Weak algo detected,Upgrade SSH,,1.2.3.4.5,weak-algo
+10.0.0.1,server1,80/tcp,HTTP Info Disclosure,9.8,Critical,Critical vuln,Patch now,CVE-2024-1234,1.2.3.4.6,details
+10.0.0.2,server2,443/tcp,TLS Version,2.0,Low,Old TLS,Upgrade,,,old-tls

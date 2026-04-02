@@ -1,0 +1,235 @@
+services:
+  orchestrator:
+    build:
+      context: ../
+      dockerfile: compose/Dockerfile.orchestrator
+    working_dir: /app
+    command:
+      [
+        "python",
+        "scripts/run_pipeline.py",
+        "--profile",
+        "config/profiles/weekly_defensive_validation.yml",
+      ]
+    volumes:
+      - ../:/app:ro
+      - evidence:/app/evidence
+      - ../scope:/app/scope:ro
+    env_file:
+      - ./env/orchestrator.env
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      defectdojo-nginx:
+        condition: service_healthy
+    networks:
+      - backend
+
+  opensearch:
+    image: opensearchproject/opensearch:2.15.0
+    environment:
+      discovery.type: single-node
+      OPENSEARCH_JAVA_OPTS: "-Xms512m -Xmx512m"
+      DISABLE_SECURITY_PLUGIN: "true"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "curl -sf http://localhost:9200/_cluster/health || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - backend
+
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:2.15.0
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    ports:
+      - "5601:5601"
+    networks:
+      - backend
+
+  defectdojo-postgres:
+    image: postgres:16.3
+    environment:
+      POSTGRES_DB: defectdojo
+      POSTGRES_USER: defectdojo
+      POSTGRES_PASSWORD: "${DOJO_DB_PASSWORD:-changeme}"
+    volumes:
+      - dojo-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U defectdojo"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  defectdojo-redis:
+    image: redis:7.2
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  defectdojo-initializer:
+    image: defectdojo/defectdojo-django:2.38.0
+    depends_on:
+      defectdojo-postgres:
+        condition: service_healthy
+    entrypoint:
+      [
+        "/wait-for-it.sh",
+        "defectdojo-postgres:5432",
+        "--",
+        "/entrypoint-initializer.sh",
+      ]
+    environment:
+      DD_DATABASE_URL: "postgresql://defectdojo:${DOJO_DB_PASSWORD:-changeme}@defectdojo-postgres:5432/defectdojo"
+      DD_ADMIN_USER: "${DOJO_ADMIN_USER:-admin}"
+      DD_ADMIN_MAIL: "${DOJO_ADMIN_MAIL:-admin@defectdojo.local}"
+      DD_ADMIN_FIRST_NAME: "${DOJO_ADMIN_FIRST_NAME:-Admin}"
+      DD_ADMIN_LAST_NAME: "${DOJO_ADMIN_LAST_NAME:-User}"
+      DD_INITIALIZE: "true"
+      DD_SECRET_KEY: "${DOJO_SECRET_KEY:-insecure-lab-key-change-me}"
+      DD_CREDENTIAL_AES_256_KEY: "${DOJO_AES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1}"
+      DD_DATABASE_READINESS_TIMEOUT: "30"
+    networks:
+      - backend
+
+  defectdojo-uwsgi:
+    image: defectdojo/defectdojo-django:2.38.0
+    depends_on:
+      defectdojo-initializer:
+        condition: service_completed_successfully
+      defectdojo-postgres:
+        condition: service_healthy
+      defectdojo-redis:
+        condition: service_healthy
+    entrypoint:
+      [
+        "/wait-for-it.sh",
+        "defectdojo-postgres:5432",
+        "-t",
+        "30",
+        "--",
+        "/entrypoint-uwsgi.sh",
+      ]
+    environment:
+      DD_DATABASE_URL: "postgresql://defectdojo:${DOJO_DB_PASSWORD:-changeme}@defectdojo-postgres:5432/defectdojo"
+      DD_CELERY_BROKER_URL: "redis://defectdojo-redis:6379/0"
+      DD_SECRET_KEY: "${DOJO_SECRET_KEY:-insecure-lab-key-change-me}"
+      DD_CREDENTIAL_AES_256_KEY: "${DOJO_AES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1}"
+      DD_ALLOWED_HOSTS: "*"
+      DD_DATABASE_READINESS_TIMEOUT: "30"
+    networks:
+      - backend
+
+  defectdojo-nginx:
+    image: defectdojo/defectdojo-nginx:2.38.0
+    environment:
+      NGINX_METRICS_ENABLED: "false"
+      DD_UWSGI_HOST: "defectdojo-uwsgi"
+      DD_UWSGI_PORT: "3031"
+    depends_on:
+      defectdojo-uwsgi:
+        condition: service_started
+    healthcheck:
+      test:
+        ["CMD-SHELL", "curl -sf http://localhost:8080/ > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    ports:
+      - "8080:8080"
+    networks:
+      - backend
+
+  defectdojo-celerybeat:
+    image: defectdojo/defectdojo-django:2.38.0
+    depends_on:
+      defectdojo-initializer:
+        condition: service_completed_successfully
+      defectdojo-postgres:
+        condition: service_healthy
+      defectdojo-redis:
+        condition: service_healthy
+    entrypoint:
+      [
+        "/wait-for-it.sh",
+        "defectdojo-postgres:5432",
+        "-t",
+        "30",
+        "--",
+        "/entrypoint-celery-beat.sh",
+      ]
+    environment:
+      DD_DATABASE_URL: "postgresql://defectdojo:${DOJO_DB_PASSWORD:-changeme}@defectdojo-postgres:5432/defectdojo"
+      DD_CELERY_BROKER_URL: "redis://defectdojo-redis:6379/0"
+      DD_SECRET_KEY: "${DOJO_SECRET_KEY:-insecure-lab-key-change-me}"
+      DD_CREDENTIAL_AES_256_KEY: "${DOJO_AES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1}"
+      DD_DATABASE_READINESS_TIMEOUT: "30"
+    networks:
+      - backend
+
+  defectdojo-celeryworker:
+    image: defectdojo/defectdojo-django:2.38.0
+    depends_on:
+      defectdojo-initializer:
+        condition: service_completed_successfully
+      defectdojo-postgres:
+        condition: service_healthy
+      defectdojo-redis:
+        condition: service_healthy
+    entrypoint:
+      [
+        "/wait-for-it.sh",
+        "defectdojo-postgres:5432",
+        "-t",
+        "30",
+        "--",
+        "/entrypoint-celery-worker.sh",
+      ]
+    environment:
+      DD_DATABASE_URL: "postgresql://defectdojo:${DOJO_DB_PASSWORD:-changeme}@defectdojo-postgres:5432/defectdojo"
+      DD_CELERY_BROKER_URL: "redis://defectdojo-redis:6379/0"
+      DD_SECRET_KEY: "${DOJO_SECRET_KEY:-insecure-lab-key-change-me}"
+      DD_CREDENTIAL_AES_256_KEY: "${DOJO_AES_KEY:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1}"
+      DD_DATABASE_READINESS_TIMEOUT: "30"
+    networks:
+      - backend
+
+  nmap-runner:
+    image: instrumentisto/nmap:7.94
+    entrypoint: ["tail", "-f", "/dev/null"]
+    volumes:
+      - evidence:/evidence
+    networks:
+      - scanner-net
+
+networks:
+  backend:
+    driver: bridge
+  scanner-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  opensearch-data:
+  dojo-db:
+  evidence:

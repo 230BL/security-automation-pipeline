@@ -1,0 +1,39 @@
+run_profile:
+  name: lab_poc
+  environment: lab
+  require_signed_scope: false
+  require_allowlist: true
+  stop_on_scope_mismatch: true
+  stop_on_window_expiry: false
+
+phases:
+  - name: inventory
+    enabled: true
+    runners: [inventory, osquery]
+
+  - name: service_validation
+    enabled: true
+    runners: [nmap]
+
+  - name: authenticated_vuln
+    enabled: true
+    runners: [greenbone]
+
+  - name: config_audit
+    enabled: true
+    runners: [lynis]
+
+  - name: web_checks
+    enabled: true #false  Only enable if you have the resources to run these checks
+    allowed_environments: [staging, lab]
+    runners: [zap, nikto]
+
+  - name: cloud_posture
+    enabled: true
+    runners: [prowler, scoutsuite]
+
+workflow:
+  import_defectdojo: true
+  index_opensearch: false
+  create_tickets: false
+  deduplicate: true

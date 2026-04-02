@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<nmaprun scanner="nmap">
+  <host>
+    <status state="up"/>
+    <address addr="10.0.0.2" addrtype="ipv4"/>
+    <ports>
+      <port protocol="tcp" portid="9999">
+        <state state="open"/>
+      </port>
+    </ports>
+  </host>
+</nmaprun>

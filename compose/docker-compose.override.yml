@@ -1,0 +1,8 @@
+services:
+  orchestrator:
+    environment:
+      PYTHONUNBUFFERED: "1"
+
+  opensearch:
+    environment:
+      OPENSEARCH_JAVA_OPTS: "-Xms1g -Xmx1g"

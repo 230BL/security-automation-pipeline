@@ -1,0 +1,18 @@
+allowed_template_tags:
+  - misconfig
+  - exposure
+  - tech
+  - token
+  - default-login
+
+blocked_template_tags:
+  - rce
+  - sqli
+  - xss
+  - upload
+  - intrusive
+  - dos
+
+max_severity: medium
+
+require_signed_templates: true

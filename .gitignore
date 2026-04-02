@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment and secrets
+.env
+compose/env/*.env
+!compose/env/*.env.example
+scope/signed_scope.pdf
+scope/scope_manifest.yml
+scope/scope_manifest.yml.sig
+scope/allowlist.txt
+scope/allowlist.txt.sig
+scope/credentials_map.yml
+scope/approved_signers.gpg
+scope/maintenance_windows.yml
+
+# Evidence - raw and normalized are generated
+evidence/raw/*
+!evidence/raw/.gitkeep
+evidence/normalized/*
+!evidence/normalized/.gitkeep
+evidence/screenshots/*
+!evidence/screenshots/.gitkeep
+evidence/hashes/*
+!evidence/hashes/.gitkeep
+evidence/reports/*
+!evidence/reports/.gitkeep
+evidence/state/*
+!evidence/state/.gitkeep
+
+# Reports output
+reports/executive/*
+!reports/executive/.gitkeep
+reports/technical/*
+!reports/technical/.gitkeep
+
+# Inventory working data
+inventory/cmdb/*
+!inventory/cmdb/.gitkeep
+inventory/dns/*
+!inventory/dns/.gitkeep
+inventory/ad/*
+!inventory/ad/.gitkeep
+inventory/cloud/*
+!inventory/cloud/.gitkeep
+inventory/merged/*
+!inventory/merged/.gitkeep
+
+# Docker volumes
+opensearch-data/
+dojo-db/
+
+# Ansible vault passwords
+.vault_pass
+ansible/*.retry
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+htmlcov/
