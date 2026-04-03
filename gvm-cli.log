@@ -1,0 +1,6 @@
+DEBUG:gvmtools.parser:Ignoring non existing config file ~/.config/gvm-tools.conf
+DEBUG:root:Parsed arguments Namespace(config='~/.config/gvm-tools.conf', loglevel='DEBUG', timeout=60, gmp_username='admin', gmp_password='admin', connection_type='socket', protocol='GMP', socketpath='/tmp/gvm/gvmd/gvmd.sock', xml='<get_version/>', raw=False, pretty=False, duration=False, infile=None)
+ERROR:gvmtools.cli:Socket /tmp/gvm/gvmd/gvmd.sock does not exist
+DEBUG:gvmtools.parser:Ignoring non existing config file ~/.config/gvm-tools.conf
+DEBUG:root:Parsed arguments Namespace(config='~/.config/gvm-tools.conf', loglevel='DEBUG', timeout=60, gmp_username='admin', gmp_password='admin', connection_type='socket', protocol='GMP', socketpath='/tmp/gvm/gvmd/gvmd.sock', xml='<get_version/>', raw=False, pretty=False, duration=False, infile=None)
+ERROR:gvmtools.cli:Socket /tmp/gvm/gvmd/gvmd.sock does not exist
