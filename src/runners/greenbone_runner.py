@@ -60,23 +60,21 @@ class GreenboneRunner(BaseRunner):
         return bool(self.tool_config.get("allow_stub", False))
 
     def _runtime_settings(self) -> dict[str, str | None]:
-        connection = str(
-            self.tool_config.get("connection", "socket")
-            or os.getenv("GREENBONE_CONNECTION")
-            or "socket"
-        ).strip().lower()
-
-        socket_path_raw = (
-            self.tool_config.get("socket_path") or os.getenv("GREENBONE_SOCKET_PATH")
+        connection = (
+            str(
+                self.tool_config.get("connection", "socket")
+                or os.getenv("GREENBONE_CONNECTION")
+                or "socket"
+            )
+            .strip()
+            .lower()
         )
+
+        socket_path_raw = self.tool_config.get("socket_path") or os.getenv("GREENBONE_SOCKET_PATH")
         host_raw = self.tool_config.get("host") or os.getenv("GREENBONE_HOST")
         port_raw = self.tool_config.get("port") or os.getenv("GREENBONE_PORT")
-        username_raw = self.tool_config.get("gmp_username") or os.getenv(
-            "GREENBONE_GMP_USERNAME"
-        )
-        password_raw = self.tool_config.get("gmp_password") or os.getenv(
-            "GREENBONE_GMP_PASSWORD"
-        )
+        username_raw = self.tool_config.get("gmp_username") or os.getenv("GREENBONE_GMP_USERNAME")
+        password_raw = self.tool_config.get("gmp_password") or os.getenv("GREENBONE_GMP_PASSWORD")
 
         socket_path = (
             str(socket_path_raw).strip()
@@ -84,15 +82,9 @@ class GreenboneRunner(BaseRunner):
             else None
         )
         host = (
-            str(host_raw).strip()
-            if host_raw is not None and str(host_raw).strip()
-            else "localhost"
+            str(host_raw).strip() if host_raw is not None and str(host_raw).strip() else "localhost"
         )
-        port = (
-            str(port_raw).strip()
-            if port_raw is not None and str(port_raw).strip()
-            else "9390"
-        )
+        port = str(port_raw).strip() if port_raw is not None and str(port_raw).strip() else "9390"
         username = (
             str(username_raw).strip()
             if username_raw is not None and str(username_raw).strip()
@@ -143,14 +135,12 @@ class GreenboneRunner(BaseRunner):
 
         if settings["username"] is None:
             issues.append(
-                "missing Greenbone GMP username "
-                "(greenbone.gmp_username or GREENBONE_GMP_USERNAME)"
+                "missing Greenbone GMP username (greenbone.gmp_username or GREENBONE_GMP_USERNAME)"
             )
 
         if settings["password"] is None:
             issues.append(
-                "missing Greenbone GMP password "
-                "(greenbone.gmp_password or GREENBONE_GMP_PASSWORD)"
+                "missing Greenbone GMP password (greenbone.gmp_password or GREENBONE_GMP_PASSWORD)"
             )
 
         connection = settings["connection"]
@@ -159,8 +149,7 @@ class GreenboneRunner(BaseRunner):
             socket_path = settings["socket_path"]
             if socket_path is None:
                 issues.append(
-                    "missing Greenbone socket path "
-                    "(greenbone.socket_path or GREENBONE_SOCKET_PATH)"
+                    "missing Greenbone socket path (greenbone.socket_path or GREENBONE_SOCKET_PATH)"
                 )
             elif not Path(socket_path).exists():
                 issues.append(f"Greenbone socket does not exist: {socket_path}")
@@ -201,11 +190,7 @@ class GreenboneRunner(BaseRunner):
             output = (result.stdout or result.stderr).strip()
             base_version = output.splitlines()[0] if output else "gvm-cli"
 
-        issues = [
-            issue
-            for issue in self._runtime_issues()
-            if issue != "gvm-cli is not installed"
-        ]
+        issues = [issue for issue in self._runtime_issues() if issue != "gvm-cli is not installed"]
         if issues:
             return f"{base_version} (misconfigured: {issues[0]})"
 
@@ -261,9 +246,7 @@ class GreenboneRunner(BaseRunner):
                     "Missing Greenbone socket path",
                     context={
                         "tool": self.tool_name,
-                        "expected": (
-                            "greenbone.socket_path or GREENBONE_SOCKET_PATH"
-                        ),
+                        "expected": ("greenbone.socket_path or GREENBONE_SOCKET_PATH"),
                     },
                 )
             cmd += ["socket", "--socketpath", socket_path]
@@ -350,9 +333,7 @@ class GreenboneRunner(BaseRunner):
         return root
 
     def _resource_names(self, resource_type: str) -> dict[str, str]:
-        root = self._run_xml(
-            f'<get_resource_names type="{resource_type}" filter="rows=-1"/>'
-        )
+        root = self._run_xml(f'<get_resource_names type="{resource_type}" filter="rows=-1"/>')
         resources: dict[str, str] = {}
 
         for item in root.findall(".//resource"):
@@ -364,12 +345,8 @@ class GreenboneRunner(BaseRunner):
         return resources
 
     def _wait_until_initialized(self) -> tuple[str, str, str]:
-        scan_config_name = str(
-            self.tool_config.get("scan_config_name", DEFAULT_SCAN_CONFIG)
-        )
-        port_list_name = str(
-            self.tool_config.get("port_list_name", DEFAULT_PORT_LIST)
-        )
+        scan_config_name = str(self.tool_config.get("scan_config_name", DEFAULT_SCAN_CONFIG))
+        port_list_name = str(self.tool_config.get("port_list_name", DEFAULT_PORT_LIST))
         scanner_name = str(self.tool_config.get("scanner_name", DEFAULT_SCANNER))
         poll_interval = int(self.tool_config.get("poll_interval_seconds", 15))
         deadline = time.monotonic() + int(self.tool_config.get("init_timeout", 1800))
@@ -401,8 +378,7 @@ class GreenboneRunner(BaseRunner):
                 )
 
             LOG.info(
-                "Waiting for Greenbone feed/init. Need config=%s port_list=%s "
-                "scanner=%s",
+                "Waiting for Greenbone feed/init. Need config=%s port_list=%s scanner=%s",
                 scan_config_name,
                 port_list_name,
                 scanner_name,
@@ -426,9 +402,7 @@ class GreenboneRunner(BaseRunner):
         )
         if ssh_credential_id:
             ssh_port = str(
-                self.tool_config.get("ssh_port")
-                or os.getenv("GREENBONE_SSH_PORT")
-                or "22"
+                self.tool_config.get("ssh_port") or os.getenv("GREENBONE_SSH_PORT") or "22"
             )
             ssh_credential = ElementTree.SubElement(
                 target,
@@ -437,14 +411,12 @@ class GreenboneRunner(BaseRunner):
             )
             ElementTree.SubElement(ssh_credential, "port").text = ssh_port
 
-        ssh_lsc_credential_id = self.tool_config.get(
-            "ssh_lsc_credential_id"
-        ) or os.getenv("GREENBONE_SSH_LSC_CREDENTIAL_ID")
+        ssh_lsc_credential_id = self.tool_config.get("ssh_lsc_credential_id") or os.getenv(
+            "GREENBONE_SSH_LSC_CREDENTIAL_ID"
+        )
         if ssh_lsc_credential_id:
             ssh_lsc_port = str(
-                self.tool_config.get("ssh_lsc_port")
-                or os.getenv("GREENBONE_SSH_LSC_PORT")
-                or "22"
+                self.tool_config.get("ssh_lsc_port") or os.getenv("GREENBONE_SSH_LSC_PORT") or "22"
             )
             ssh_lsc = ElementTree.SubElement(
                 target,
@@ -453,9 +425,9 @@ class GreenboneRunner(BaseRunner):
             )
             ElementTree.SubElement(ssh_lsc, "port").text = ssh_lsc_port
 
-        ssh_elevate_credential_id = self.tool_config.get(
-            "ssh_elevate_credential_id"
-        ) or os.getenv("GREENBONE_SSH_ELEVATE_CREDENTIAL_ID")
+        ssh_elevate_credential_id = self.tool_config.get("ssh_elevate_credential_id") or os.getenv(
+            "GREENBONE_SSH_ELEVATE_CREDENTIAL_ID"
+        )
         if ssh_elevate_credential_id:
             ElementTree.SubElement(
                 target,
@@ -526,8 +498,7 @@ class GreenboneRunner(BaseRunner):
 
             if time.monotonic() >= deadline:
                 raise RunnerExecutionError(
-                    f"Greenbone task did not finish before timeout. "
-                    f"Last status: {status}",
+                    f"Greenbone task did not finish before timeout. Last status: {status}",
                     context={
                         "tool": self.tool_name,
                         "task_id": task_id,
@@ -541,16 +512,14 @@ class GreenboneRunner(BaseRunner):
         run_id = self.context.run_metadata.run_id
         out = output_dir / f"openvas_{run_id}.csv"
         header = (
-            "IP,Hostname,Port,NVT Name,CVSS,Severity,Summary,"
-            "Solution,CVEs,NVT OID,Specific Result"
+            "IP,Hostname,Port,NVT Name,CVSS,Severity,Summary,Solution,CVEs,NVT OID,Specific Result"
         )
         max_hosts = int(self.tool_config.get("max_concurrent_hosts", 5))
 
         lines = [header]
         for target in targets[:max_hosts]:
             lines.append(
-                f"{target},,,Greenbone stub,0.0,Info,"
-                "Stub output (no scan executed),,,STUB,"
+                f"{target},,,Greenbone stub,0.0,Info,Stub output (no scan executed),,,STUB,"
             )
 
         out.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -595,9 +564,7 @@ class GreenboneRunner(BaseRunner):
                     continue
 
                 nvt_name = (
-                    result.findtext("name")
-                    or nvt.findtext("name")
-                    or "Unknown vulnerability"
+                    result.findtext("name") or nvt.findtext("name") or "Unknown vulnerability"
                 ).strip()
                 cvss = (nvt.findtext("cvss_base") or "0").strip()
                 severity = (result.findtext("threat") or "Info").strip()

@@ -87,19 +87,11 @@ def _finding_from_vuln(
         tool="nikto",
         asset_id=host_ip,
         endpoint=endpoint,
-        title=(
-            f"Nikto: {description[:100]}"
-            if description
-            else f"OSVDB-{vuln_id}"
-        ),
+        title=(f"Nikto: {description[:100]}" if description else f"OSVDB-{vuln_id}"),
         severity=severity,
         description=description,
         evidence=f"{method} {uri}",
-        vuln_id=(
-            f"OSVDB-{vuln_id}"
-            if vuln_id and str(vuln_id) != "0"
-            else None
-        ),
+        vuln_id=(f"OSVDB-{vuln_id}" if vuln_id and str(vuln_id) != "0" else None),
         tags=["web-server", "misconfiguration"],
     )
 
