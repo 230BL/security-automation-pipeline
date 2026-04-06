@@ -36,7 +36,8 @@ def test_nmap_get_version_local(
 ) -> None:
     ctx = build_gate_context(tmp_path, fixtures)
     monkeypatch.setattr(
-        "src.runners.nmap_runner.shutil.which", lambda name: "/bin/nmap" if name == "nmap" else None
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
     )
     mock_run = MagicMock(
         return_value=MagicMock(
@@ -79,17 +80,14 @@ def test_nmap_get_version_unknown(
     assert NmapRunner(ctx).get_version() == "unknown"
 
 
-def test_nmap_execute_stub_no_nmap_no_docker(
+def test_nmap_execute_no_nmap_no_docker_raises(
     tmp_path: Path, fixtures: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = build_gate_context(tmp_path, fixtures, run_id="RUN-NM")
     monkeypatch.setattr("src.runners.nmap_runner.shutil.which", lambda *_: None)
-    # health_check would fail with no tools; call execute() as direct entry for stub artifact
-    out = tmp_path / "out"
-    out.mkdir(parents=True, exist_ok=True)
-    paths = NmapRunner(ctx).execute(["192.168.56.10"], out)
-    assert len(paths) == 1
-    assert paths[0].read_text(encoding="utf-8").startswith("<?xml")
+
+    with pytest.raises(Exception, match="Neither nmap nor docker is installed"):
+        NmapRunner(ctx).execute(["192.168.56.10"], tmp_path / "out")
 
 
 def test_nmap_execute_local_success(
@@ -106,13 +104,49 @@ def test_nmap_execute_local_success(
 
     def fake_run(cmd: list[str], **_kwargs):
         assert cmd[0] == "/bin/nmap"
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text("<nmaprun/>", encoding="utf-8")
+        if "--version" not in cmd:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(
+                '<?xml version="1.0"?><nmaprun></nmaprun>\n',
+                encoding="utf-8",
+            )
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("src.runners.nmap_runner.subprocess.run", fake_run)
     paths = NmapRunner(ctx).run(["192.168.56.10"], out_dir)
     assert paths == [out_file]
+
+
+def test_nmap_local_unprivileged_uses_connect_scan(
+    tmp_path: Path, fixtures: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctx = build_gate_context(tmp_path, fixtures, run_id="RUN-NM")
+    out_dir = tmp_path / "out"
+    out_file = out_dir / "nmap_RUN-NM.xml"
+    captured: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
+    )
+    monkeypatch.setattr("src.runners.nmap_runner.os.geteuid", lambda: 1000)
+
+    def fake_run(cmd: list[str], **_kwargs):
+        captured.append(cmd)
+        if "--version" not in cmd:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(
+                '<?xml version="1.0"?><nmaprun></nmaprun>\n',
+                encoding="utf-8",
+            )
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("src.runners.nmap_runner.subprocess.run", fake_run)
+    NmapRunner(ctx).run(["192.168.56.10"], out_dir)
+
+    scan_cmd = next(cmd for cmd in captured if "--version" not in cmd)
+    assert "-sT" in scan_cmd
+    assert "-sS" not in scan_cmd
 
 
 def test_nmap_timing_t5_reset_to_t3(
@@ -121,22 +155,29 @@ def test_nmap_timing_t5_reset_to_t3(
     ctx = build_gate_context(tmp_path, fixtures, run_id="RUN-NM")
     out_dir = tmp_path / "out"
     out_file = out_dir / "nmap_RUN-NM.xml"
-    monkeypatch.setattr(
-        "src.runners.nmap_runner.shutil.which", lambda name: "/bin/nmap" if name == "nmap" else None
-    )
     captured: list[list[str]] = []
+
+    monkeypatch.setattr(
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
+    )
 
     def fake_run(cmd: list[str], **_kwargs):
         captured.append(cmd)
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text("<nmaprun/>", encoding="utf-8")
+        if "--version" not in cmd:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(
+                '<?xml version="1.0"?><nmaprun></nmaprun>\n',
+                encoding="utf-8",
+            )
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("src.runners.nmap_runner.subprocess.run", fake_run)
     NmapRunner(ctx, {"nmap": {"timing_template": "T5"}}).run(["192.168.56.10"], out_dir)
-    # First subprocess call is get_version's --version; scan is second
-    scan_cmd = captured[1] if len(captured) > 1 else captured[0]
-    assert any(x == "-T3" or x.endswith("T3") for x in scan_cmd)
+
+    scan_cmd = next(cmd for cmd in captured if "--version" not in cmd)
+    assert "-T3" in scan_cmd
+    assert "-T5" not in scan_cmd
 
 
 def test_nmap_exclusions_file(
@@ -145,18 +186,26 @@ def test_nmap_exclusions_file(
     ctx = build_gate_context(tmp_path, fixtures, run_id="RUN-NM")
     out_dir = tmp_path / "out"
     out_file = out_dir / "nmap_RUN-NM.xml"
+
     monkeypatch.setattr(
-        "src.runners.nmap_runner.shutil.which", lambda name: "/bin/nmap" if name == "nmap" else None
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
     )
 
     def fake_run(cmd: list[str], **_kwargs):
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text("<nmaprun/>", encoding="utf-8")
+        if "--version" not in cmd:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(
+                '<?xml version="1.0"?><nmaprun></nmaprun>\n',
+                encoding="utf-8",
+            )
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("src.runners.nmap_runner.subprocess.run", fake_run)
     monkeypatch.setattr(ctx.manifest, "all_exclusions", lambda: ["10.0.0.0/8"])
+
     NmapRunner(ctx).run(["192.168.56.10"], out_dir)
+
     exclude = out_dir / "nmap_exclude.txt"
     assert exclude.exists()
     assert "10.0.0.0/8" in exclude.read_text(encoding="utf-8")
@@ -166,30 +215,39 @@ def test_nmap_bad_return_code_raises(
     tmp_path: Path, fixtures: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = build_gate_context(tmp_path, fixtures)
+
     monkeypatch.setattr(
-        "src.runners.nmap_runner.shutil.which", lambda name: "/bin/nmap" if name == "nmap" else None
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
     )
     monkeypatch.setattr(
         "src.runners.nmap_runner.subprocess.run",
         lambda *_a, **_k: MagicMock(returncode=2, stdout="", stderr="err"),
     )
-    with pytest.raises(RunnerError, match="Nmap exited"):
+
+    with pytest.raises(RunnerError, match="Nmap exited with code 2"):
         NmapRunner(ctx).run(["192.168.56.10"], tmp_path / "out")
 
 
-def test_nmap_no_output_returns_empty(
+def test_nmap_no_output_raises(
     tmp_path: Path, fixtures: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx = build_gate_context(tmp_path, fixtures)
+
     monkeypatch.setattr(
-        "src.runners.nmap_runner.shutil.which", lambda name: "/bin/nmap" if name == "nmap" else None
+        "src.runners.nmap_runner.shutil.which",
+        lambda name: "/bin/nmap" if name == "nmap" else None,
     )
     monkeypatch.setattr(
         "src.runners.nmap_runner.subprocess.run",
         lambda *_a, **_k: MagicMock(returncode=0, stdout="", stderr=""),
     )
-    paths = NmapRunner(ctx).run(["192.168.56.10"], tmp_path / "out")
-    assert paths == []
+
+    with pytest.raises(
+        RunnerError,
+        match="Nmap did not produce the expected XML output file",
+    ):
+        NmapRunner(ctx).run(["192.168.56.10"], tmp_path / "out")
 
 
 def test_nmap_execute_docker_path(
@@ -209,8 +267,12 @@ def test_nmap_execute_docker_path(
     def fake_run(cmd: list[str], **_kwargs):
         assert cmd[0] == "/bin/docker"
         assert NMAP_DOCKER_IMAGE in cmd
-        out_file.parent.mkdir(parents=True, exist_ok=True)
-        out_file.write_text("<nmaprun/>", encoding="utf-8")
+        if "--version" not in cmd:
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            out_file.write_text(
+                '<?xml version="1.0"?><nmaprun></nmaprun>\n',
+                encoding="utf-8",
+            )
         return MagicMock(returncode=0, stdout="", stderr="")
 
     monkeypatch.setattr("src.runners.nmap_runner.subprocess.run", fake_run)

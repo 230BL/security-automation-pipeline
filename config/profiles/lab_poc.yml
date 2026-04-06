@@ -29,7 +29,7 @@ phases:
     runners: [zap, nikto, nuclei]
 
   - name: cloud_posture
-    enabled: true
+    enabled: false
     runners: [prowler, scoutsuite]
 
 workflow:

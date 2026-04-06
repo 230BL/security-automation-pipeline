@@ -58,59 +58,61 @@ class GreenboneRunner(BaseRunner):
     def _allow_stub(self) -> bool:
         return False
 
+    @staticmethod
+    def _first_non_empty(*values: object) -> str | None:
+        for value in values:
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text
+        return None
+
     def _runtime_settings(self) -> dict[str, str | None]:
         connection = (
-            str(
-                self.tool_config.get("connection", "socket")
-                or os.getenv("GREENBONE_CONNECTION")
-                or "socket"
+            self._first_non_empty(
+                os.getenv("GREENBONE_CONNECTION"),
+                self.tool_config.get("connection"),
+                "socket",
             )
-            .strip()
-            .lower()
-        )
+            or "socket"
+        ).lower()
 
-        socket_path_raw = self.tool_config.get("socket_path") or os.getenv("GREENBONE_SOCKET_PATH")
-        host_raw = self.tool_config.get("host") or os.getenv("GREENBONE_HOST")
-        port_raw = self.tool_config.get("port") or os.getenv("GREENBONE_PORT")
-        username_raw = self.tool_config.get("gmp_username") or os.getenv("GREENBONE_GMP_USERNAME")
-        password_raw = self.tool_config.get("gmp_password") or os.getenv("GREENBONE_GMP_PASSWORD")
-
-        socket_path = (
-            str(socket_path_raw).strip()
-            if socket_path_raw is not None and str(socket_path_raw).strip()
-            else None
+        socket_path = self._first_non_empty(
+            os.getenv("GREENBONE_SOCKET_PATH"),
+            self.tool_config.get("socket_path"),
         )
         host = (
-            str(host_raw).strip() if host_raw is not None and str(host_raw).strip() else "localhost"
+            self._first_non_empty(
+                os.getenv("GREENBONE_HOST"),
+                self.tool_config.get("host"),
+                "localhost",
+            )
+            or "localhost"
         )
-        port = str(port_raw).strip() if port_raw is not None and str(port_raw).strip() else "9390"
-        username = (
-            str(username_raw).strip()
-            if username_raw is not None and str(username_raw).strip()
-            else None
+        port = (
+            self._first_non_empty(
+                os.getenv("GREENBONE_PORT"),
+                self.tool_config.get("port"),
+                "9390",
+            )
+            or "9390"
         )
-        password = (
-            str(password_raw).strip()
-            if password_raw is not None and str(password_raw).strip()
-            else None
+        username = self._first_non_empty(
+            os.getenv("GREENBONE_GMP_USERNAME"),
+            self.tool_config.get("gmp_username"),
         )
-
-        ssh_username_raw = self.tool_config.get("ssh_username") or os.getenv(
-            "GREENBONE_SSH_USERNAME"
+        password = self._first_non_empty(
+            os.getenv("GREENBONE_GMP_PASSWORD"),
+            self.tool_config.get("gmp_password"),
         )
-        ssh_password_raw = self.tool_config.get("ssh_password") or os.getenv(
-            "GREENBONE_SSH_PASSWORD"
+        ssh_username = self._first_non_empty(
+            os.getenv("GREENBONE_SSH_USERNAME"),
+            self.tool_config.get("ssh_username"),
         )
-
-        ssh_username = (
-            str(ssh_username_raw).strip()
-            if ssh_username_raw is not None and str(ssh_username_raw).strip()
-            else None
-        )
-        ssh_password = (
-            str(ssh_password_raw).strip()
-            if ssh_password_raw is not None and str(ssh_password_raw).strip()
-            else None
+        ssh_password = self._first_non_empty(
+            os.getenv("GREENBONE_SSH_PASSWORD"),
+            self.tool_config.get("ssh_password"),
         )
 
         return {
@@ -162,8 +164,36 @@ class GreenboneRunner(BaseRunner):
 
         return issues
 
+    @staticmethod
+    def _sanitize_command_for_log(cmd: list[str]) -> str:
+        redacted_flags = {"--gmp-password", "--ssh-password"}
+        sanitized: list[str] = []
+        redact_next = False
+
+        for part in cmd:
+            if redact_next:
+                sanitized.append("***")
+                redact_next = False
+                continue
+            sanitized.append(part)
+            if part in redacted_flags:
+                redact_next = True
+
+        return " ".join(sanitized)
+
     def health_check(self) -> bool:
-        return not self._runtime_issues()
+        issues = self._runtime_issues()
+        if issues:
+            LOG.error("Greenbone health check failed: %s", "; ".join(issues))
+            return False
+
+        try:
+            self._run_xml("<get_version/>")
+        except RunnerExecutionError as exc:
+            LOG.error("Greenbone connectivity/auth check failed: %s", exc)
+            return False
+
+        return True
 
     def get_version(self) -> str:
         exe = self._runtime_settings()["gvm_cli"]
@@ -204,7 +234,7 @@ class GreenboneRunner(BaseRunner):
                 "Missing Greenbone GMP username",
                 context={
                     "tool": self.tool_name,
-                    "expected": ("greenbone.gmp_username or GREENBONE_GMP_USERNAME"),
+                    "expected": "greenbone.gmp_username or GREENBONE_GMP_USERNAME",
                 },
             )
 
@@ -213,7 +243,7 @@ class GreenboneRunner(BaseRunner):
                 "Missing Greenbone GMP password",
                 context={
                     "tool": self.tool_name,
-                    "expected": ("greenbone.gmp_password or GREENBONE_GMP_PASSWORD"),
+                    "expected": "greenbone.gmp_password or GREENBONE_GMP_PASSWORD",
                 },
             )
 
@@ -236,7 +266,7 @@ class GreenboneRunner(BaseRunner):
                     "Missing Greenbone socket path",
                     context={
                         "tool": self.tool_name,
-                        "expected": ("greenbone.socket_path or GREENBONE_SOCKET_PATH"),
+                        "expected": "greenbone.socket_path or GREENBONE_SOCKET_PATH",
                     },
                 )
             cmd += ["socket", "--socketpath", socket_path]
@@ -265,10 +295,7 @@ class GreenboneRunner(BaseRunner):
 
         raise RunnerExecutionError(
             f"Unsupported Greenbone connection type: {connection}",
-            context={
-                "tool": self.tool_name,
-                "connection": connection,
-            },
+            context={"tool": self.tool_name, "connection": connection},
         )
 
     def _run_xml(
@@ -277,7 +304,10 @@ class GreenboneRunner(BaseRunner):
         timeout: int | None = None,
     ) -> ElementTree.Element:
         cmd = [*self._base_command(), "--xml", xml_payload]
-        LOG.info("Running Greenbone GMP command: %s", " ".join(cmd[:-1]))
+        LOG.info(
+            "Running Greenbone GMP command: %s",
+            self._sanitize_command_for_log(cmd[:-1]),
+        )
 
         result = subprocess.run(
             cmd,
@@ -387,42 +417,55 @@ class GreenboneRunner(BaseRunner):
         ElementTree.SubElement(target, "hosts").text = ",".join(targets)
         ElementTree.SubElement(target, "port_list", {"id": port_list_id})
 
-        ssh_credential_id = self.tool_config.get("ssh_credential_id") or os.getenv(
-            "GREENBONE_SSH_CREDENTIAL_ID"
+        ssh_credential_id = self._first_non_empty(
+            os.getenv("GREENBONE_SSH_CREDENTIAL_ID"),
+            self.tool_config.get("ssh_credential_id"),
         )
         if ssh_credential_id:
-            ssh_port = str(
-                self.tool_config.get("ssh_port") or os.getenv("GREENBONE_SSH_PORT") or "22"
+            ssh_port = (
+                self._first_non_empty(
+                    os.getenv("GREENBONE_SSH_PORT"),
+                    self.tool_config.get("ssh_port"),
+                    "22",
+                )
+                or "22"
             )
             ssh_credential = ElementTree.SubElement(
                 target,
                 "ssh_credential",
-                {"id": str(ssh_credential_id)},
+                {"id": ssh_credential_id},
             )
             ElementTree.SubElement(ssh_credential, "port").text = ssh_port
 
-        ssh_lsc_credential_id = self.tool_config.get("ssh_lsc_credential_id") or os.getenv(
-            "GREENBONE_SSH_LSC_CREDENTIAL_ID"
+        ssh_lsc_credential_id = self._first_non_empty(
+            os.getenv("GREENBONE_SSH_LSC_CREDENTIAL_ID"),
+            self.tool_config.get("ssh_lsc_credential_id"),
         )
         if ssh_lsc_credential_id:
-            ssh_lsc_port = str(
-                self.tool_config.get("ssh_lsc_port") or os.getenv("GREENBONE_SSH_LSC_PORT") or "22"
+            ssh_lsc_port = (
+                self._first_non_empty(
+                    os.getenv("GREENBONE_SSH_LSC_PORT"),
+                    self.tool_config.get("ssh_lsc_port"),
+                    "22",
+                )
+                or "22"
             )
             ssh_lsc = ElementTree.SubElement(
                 target,
                 "ssh_lsc_credential",
-                {"id": str(ssh_lsc_credential_id)},
+                {"id": ssh_lsc_credential_id},
             )
             ElementTree.SubElement(ssh_lsc, "port").text = ssh_lsc_port
 
-        ssh_elevate_credential_id = self.tool_config.get("ssh_elevate_credential_id") or os.getenv(
-            "GREENBONE_SSH_ELEVATE_CREDENTIAL_ID"
+        ssh_elevate_credential_id = self._first_non_empty(
+            os.getenv("GREENBONE_SSH_ELEVATE_CREDENTIAL_ID"),
+            self.tool_config.get("ssh_elevate_credential_id"),
         )
         if ssh_elevate_credential_id:
             ElementTree.SubElement(
                 target,
                 "ssh_elevate_credential",
-                {"id": str(ssh_elevate_credential_id)},
+                {"id": ssh_elevate_credential_id},
             )
 
         return ElementTree.tostring(target, encoding="unicode")
@@ -498,10 +541,8 @@ class GreenboneRunner(BaseRunner):
 
             time.sleep(poll_interval)
 
-    def _report_id_from_start_response(
-        self,
-        root: ElementTree.Element,
-    ) -> str:
+    @staticmethod
+    def _report_id_from_start_response(root: ElementTree.Element) -> str:
         return ((root.findtext("report_id") or "") or (root.findtext(".//report_id") or "")).strip()
 
     def _report_id_for_task(self, task_id: str) -> str:

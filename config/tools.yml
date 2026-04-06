@@ -1,4 +1,3 @@
-
 tool_defaults:
   nmap:
     max_rate: 500
@@ -10,9 +9,10 @@ tool_defaults:
 
   nmap_safe_profile:
     args: >-
-      -sS -sV --version-intensity 2
+      -sT -sV --version-intensity 2
       -T3 --max-rate {max_rate} --max-retries {max_retries}
       --host-timeout {host_timeout}
+      --max-parallelism {max_parallelism}
       -oX {output_path}
       --excludefile {exclusion_file}
       -iL {target_file}
@@ -20,7 +20,7 @@ tool_defaults:
   greenbone:
     allow_stub: false
     connection: socket
-    socket_path: /tmp/gvm/gvmd/gvmd.sock
+    socket_path: /home/brahim/gvm-sockets/gvmd/gvmd.sock
     max_concurrent_hosts: 5
     max_concurrent_nvts: 4
     network_timeout: 40

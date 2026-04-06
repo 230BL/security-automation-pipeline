@@ -3,6 +3,12 @@
 
 Enforces governance gates, runs approved phases, normalizes results,
 and optionally pushes to DefectDojo + OpenSearch.
+
+Behavior:
+- No stub handling in the orchestrator.
+- Runner failures propagate honestly.
+- Empty artifact sets from executed runners are treated as failures.
+- ScoutSuite parsing is blocked until a real ScoutSuite parser is added.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ sys.path.insert(0, str(ROOT))
 from src.integrations.defectdojo_client import DefectDojoClient  # noqa: E402
 from src.integrations.opensearch_client import OpenSearchClient  # noqa: E402
 from src.integrations.ticket_client import create_tickets  # noqa: E402
+from src.orchestrator.exceptions import RunnerExecutionError  # noqa: E402
 from src.orchestrator.gate import run_gate  # noqa: E402
 from src.orchestrator.run_state import RunState  # noqa: E402
 from src.parsers.lynis_dat import parse_lynis_dat  # noqa: E402
@@ -56,6 +63,18 @@ from src.utils.logging_setup import setup_logging  # noqa: E402
 
 LOG = logging.getLogger("pipeline")
 
+TARGETED_RUNNERS = {
+    "inventory",
+    "osquery",
+    "wazuh",
+    "nmap",
+    "greenbone",
+    "lynis",
+    "zap",
+    "nikto",
+    "nuclei",
+}
+
 
 def _load_yaml(path: Path) -> dict[str, Any]:
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -86,6 +105,7 @@ def _is_web_target(target: str) -> bool:
 def _dedupe_targets(targets: list[str]) -> list[str]:
     seen: set[str] = set()
     unique: list[str] = []
+
     for target in targets:
         value = str(target).strip()
         if not value:
@@ -95,43 +115,90 @@ def _dedupe_targets(targets: list[str]) -> list[str]:
             continue
         seen.add(key)
         unique.append(value)
+
     return unique
 
 
 def _collect_runner_targets(ctx: Any, runner_name: str) -> list[str]:
     base_targets = _dedupe_targets(list(ctx.validated_targets))
     web_targets = [target for target in base_targets if _is_web_target(target)]
+    network_targets = [target for target in base_targets if not _is_web_target(target)]
 
-    if runner_name in {"zap", "nikto", "nuclei"}:
+    if runner_name in {"zap", "nikto"}:
         return web_targets
 
-    return [target for target in base_targets if not _is_web_target(target)]
+    if runner_name == "nuclei":
+        return base_targets
+
+    return network_targets
+
+
+def _runner_should_skip_for_no_targets(runner_name: str, runner_targets: list[str]) -> bool:
+    return runner_name in TARGETED_RUNNERS and not runner_targets
+
+
+def _parse_artifact(tool: str, artifact: Path) -> list[Any]:
+    if tool == "nmap":
+        return parse_nmap_xml(artifact)
+    if tool == "greenbone":
+        return parse_openvas_csv(artifact)
+    if tool == "zap":
+        return parse_zap_xml(artifact)
+    if tool == "nikto":
+        return parse_nikto_json(artifact)
+    if tool == "wazuh":
+        findings = parse_wazuh_vulnerabilities(artifact)
+        findings += parse_wazuh_sca(artifact)
+        return findings
+    if tool == "prowler":
+        return parse_prowler_json(artifact)
+    if tool == "lynis":
+        return parse_lynis_dat(artifact)
+    if tool == "nuclei":
+        return parse_nuclei_jsonl(artifact)
+    if tool == "inventory":
+        return []
+    if tool == "osquery":
+        return []
+    if tool == "scoutsuite":
+        raise RunnerExecutionError(
+            "ScoutSuite parsing is not implemented yet. "
+            "Do not ingest ScoutSuite results until a real ScoutSuite parser is added.",
+            context={"tool": tool, "artifact": str(artifact)},
+        )
+
+    raise RunnerExecutionError(
+        f"Unsupported parser mapping for tool: {tool}",
+        context={"tool": tool, "artifact": str(artifact)},
+    )
 
 
 def _parse_artifacts(tool: str, artifacts: list[Path]) -> list[Any]:
-    findings = []
-    for a in artifacts:
-        if not a.exists() or a.stat().st_size == 0:
-            continue
-        if tool == "nmap":
-            findings += parse_nmap_xml(a)
-        elif tool == "greenbone":
-            findings += parse_openvas_csv(a)
-        elif tool == "zap":
-            findings += parse_zap_xml(a)
-        elif tool == "nikto":
-            findings += parse_nikto_json(a)
-        elif tool == "wazuh":
-            findings += parse_wazuh_vulnerabilities(a)
-            findings += parse_wazuh_sca(a)
-        elif tool == "prowler":
-            findings += parse_prowler_json(a)
-        elif tool == "scoutsuite":
-            findings += parse_prowler_json(a)
-        elif tool == "lynis":
-            findings += parse_lynis_dat(a)
-        elif tool == "nuclei":
-            findings += parse_nuclei_jsonl(a)
+    findings: list[Any] = []
+
+    for artifact in artifacts:
+        if not artifact.exists():
+            raise RunnerExecutionError(
+                "Runner reported an artifact path that does not exist",
+                context={"tool": tool, "artifact": str(artifact)},
+            )
+
+        if artifact.stat().st_size == 0:
+            raise RunnerExecutionError(
+                "Runner produced an empty artifact",
+                context={"tool": tool, "artifact": str(artifact)},
+            )
+
+        try:
+            findings.extend(_parse_artifact(tool, artifact))
+        except RunnerExecutionError:
+            raise
+        except Exception as exc:
+            raise RunnerExecutionError(
+                f"Failed to parse artifact for tool '{tool}': {exc}",
+                context={"tool": tool, "artifact": str(artifact)},
+            ) from exc
+
     return findings
 
 
@@ -182,7 +249,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
     raw_dir.mkdir(parents=True, exist_ok=True)
     norm_dir.mkdir(parents=True, exist_ok=True)
 
-    all_findings = []
+    all_findings: list[Any] = []
 
     for phase in profile_cfg.get("phases", []):
         if not phase.get("enabled", False):
@@ -190,6 +257,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
         phase_name = str(phase["name"])
         if state.is_complete(phase_name):
+            LOG.info("Skipping already-complete phase %s", phase_name)
             continue
 
         state.mark_started(phase_name)
@@ -197,24 +265,54 @@ def main(profile: Path, dry_run: bool = False) -> int:
         allowed_envs = phase.get("allowed_environments")
         if allowed_envs and environment not in allowed_envs:
             state.mark_skipped(phase_name, f"env '{environment}' not in {allowed_envs}")
+            LOG.info("Skipping phase %s: env '%s' not in %s", phase_name, environment, allowed_envs)
             continue
 
         phase_out = raw_dir / phase_name
         phase_out.mkdir(parents=True, exist_ok=True)
         artifacts_all: list[str] = []
 
-        for runner_name in phase.get("runners", []):
-            runner_name_str = str(runner_name)
-            runner_cls = _runner_map().get(runner_name_str)
-            if runner_cls is None:
-                raise RuntimeError(f"Unknown runner: {runner_name_str}")
+        try:
+            for runner_name in phase.get("runners", []):
+                runner_name_str = str(runner_name)
+                runner_cls = _runner_map().get(runner_name_str)
+                if runner_cls is None:
+                    raise RunnerExecutionError(
+                        f"Unknown runner: {runner_name_str}",
+                        context={"phase": phase_name, "tool": runner_name_str},
+                    )
 
-            runner = runner_cls(ctx, tools_cfg)
-            out_dir = phase_out / runner_name_str
-            runner_targets = _collect_runner_targets(ctx, runner_name_str)
-            artifacts = runner.run(runner_targets, out_dir)
-            artifacts_all += [str(p) for p in artifacts]
-            all_findings += _parse_artifacts(runner_name_str, artifacts)
+                runner = runner_cls(ctx, tools_cfg)
+                out_dir = phase_out / runner_name_str
+                runner_targets = _collect_runner_targets(ctx, runner_name_str)
+
+                if _runner_should_skip_for_no_targets(runner_name_str, runner_targets):
+                    LOG.info(
+                        "Skipping runner %s in phase %s because there are no applicable targets",
+                        runner_name_str,
+                        phase_name,
+                    )
+                    continue
+
+                artifacts = runner.run(runner_targets, out_dir)
+
+                if not artifacts:
+                    raise RunnerExecutionError(
+                        f"{runner_name_str} produced no artifacts",
+                        context={
+                            "phase": phase_name,
+                            "tool": runner_name_str,
+                            "targets": runner_targets,
+                            "output_dir": str(out_dir),
+                        },
+                    )
+
+                artifacts_all.extend(str(path) for path in artifacts)
+                all_findings.extend(_parse_artifacts(runner_name_str, artifacts))
+
+        except Exception as exc:
+            state.mark_failed(phase_name, str(exc))
+            raise
 
         state.mark_complete(phase_name, artifacts=artifacts_all)
 
@@ -242,16 +340,16 @@ def main(profile: Path, dry_run: bool = False) -> int:
         output_dir=ROOT / "evidence" / "reports",
     )
 
-    wf = profile_cfg.get("workflow", {})
+    workflow_cfg = profile_cfg.get("workflow", {})
 
-    if wf.get("create_tickets", False):
+    if workflow_cfg.get("create_tickets", False):
         create_tickets(
             scored,
             rules_path=ROOT / "policy" / "ticket_rules.yml",
             output_path=norm_dir / "tickets.json",
         )
 
-    if wf.get("index_opensearch", False):
+    if workflow_cfg.get("index_opensearch", False):
         client = OpenSearchClient(
             host=os.environ.get("OPENSEARCH_HOST", "localhost"),
             port=int(os.environ.get("OPENSEARCH_PORT", "9200")),
@@ -262,24 +360,29 @@ def main(profile: Path, dry_run: bool = False) -> int:
         )
         if client.health_check():
             client.index_findings(scored, run_id=run_id)
-            client.index_run_metadata(run_id, ctx.run_metadata.to_dict(), finding_count=len(scored))
+            client.index_run_metadata(
+                run_id,
+                ctx.run_metadata.to_dict(),
+                finding_count=len(scored),
+            )
 
-    if wf.get("import_defectdojo", False):
+    if workflow_cfg.get("import_defectdojo", False):
         dojo_url = os.environ.get("DEFECTDOJO_URL", "")
         dojo_token = os.environ.get("DEFECTDOJO_TOKEN", "")
+
         if dojo_url and dojo_token:
             dojo = DefectDojoClient(dojo_url, dojo_token)
             import_file = norm_dir / "generic_findings.json"
 
-            dojo_findings = []
-            for f in scored:
-                tags = f.get("tags", [])
+            dojo_findings: list[dict[str, Any]] = []
+            for finding in scored:
+                tags = finding.get("tags", [])
                 if not isinstance(tags, list):
                     tags = [str(tags)] if tags else []
                 else:
                     tags = [str(tag) for tag in tags if tag is not None]
 
-                references = f.get("endpoint") or ""
+                references = finding.get("endpoint") or ""
                 if isinstance(references, (list, dict)):
                     references = json.dumps(references, default=str)
                 else:
@@ -287,12 +390,14 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
                 dojo_findings.append(
                     {
-                        "title": str(f.get("title", "")),
-                        "severity": str(f.get("composite_severity") or f.get("severity", "Info")),
-                        "description": str(f.get("description", "")),
+                        "title": str(finding.get("title", "")),
+                        "severity": str(
+                            finding.get("composite_severity") or finding.get("severity", "Info")
+                        ),
+                        "description": str(finding.get("description", "")),
                         "date": _date.today().isoformat(),
-                        "cve": str(f.get("cve") or ""),
-                        "mitigation": str(f.get("remediation") or ""),
+                        "cve": str(finding.get("cve") or ""),
+                        "mitigation": str(finding.get("remediation") or ""),
                         "references": references,
                         "tags": tags,
                     }
@@ -318,14 +423,18 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
 
 def cli() -> None:
-    p = argparse.ArgumentParser(description="Run the gated security automation pipeline")
-    p.add_argument(
+    parser = argparse.ArgumentParser(description="Run the gated security automation pipeline")
+    parser.add_argument(
         "--profile",
         default="config/profiles/lab_poc.yml",
         help="Path to workflow profile YAML (relative to project root)",
     )
-    p.add_argument("--dry-run", action="store_true", help="Validate governance gate only")
-    args = p.parse_args()
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate governance gate only",
+    )
+    args = parser.parse_args()
     raise SystemExit(main(profile=ROOT / args.profile, dry_run=args.dry_run))
 
 
