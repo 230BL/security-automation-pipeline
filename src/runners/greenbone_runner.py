@@ -32,13 +32,13 @@ DEFAULT_SCAN_CONFIG = "Full and fast"
 DEFAULT_PORT_LIST = "All IANA assigned TCP"
 DEFAULT_SCANNER = "OpenVAS Default"
 
-DONE_STATUSES = {"Done"}
+SUCCESS_STATUSES = {"Done"}
+REPORTABLE_STATUSES = {"Done", "Stopped"}
 FAILED_STATUSES = {
     "Delete Requested",
     "Internal Error",
     "Interrupted",
     "Stop Requested",
-    "Stopped",
 }
 
 
@@ -500,14 +500,61 @@ class GreenboneRunner(BaseRunner):
 
         return ElementTree.tostring(task, encoding="unicode")
 
-    def _wait_for_task_completion(self, task_id: str) -> None:
+    def _get_task_root(self, task_id: str) -> ElementTree.Element:
+        return self._run_xml(f'<get_tasks task_id="{task_id}" details="1"/>')
+
+    @staticmethod
+    def _task_status(task_root: ElementTree.Element) -> str:
+        return (task_root.findtext(".//task/status") or "").strip()
+
+    @staticmethod
+    def _task_progress(task_root: ElementTree.Element) -> str:
+        return (task_root.findtext(".//task/progress") or "").strip()
+
+    @staticmethod
+    def _task_scan_end(task_root: ElementTree.Element) -> str:
+        return (task_root.findtext(".//task/current_report/report/scan_end") or "").strip()
+
+    @staticmethod
+    def _task_report_id(task_root: ElementTree.Element) -> str:
+        report_node = task_root.find(".//task/current_report/report") or task_root.find(
+            ".//task/last_report/report"
+        )
+        if report_node is None:
+            return ""
+        return (report_node.get("id") or "").strip()
+
+    @staticmethod
+    def _task_report_finished(task_root: ElementTree.Element) -> str:
+        return (task_root.findtext(".//task/report_count/finished") or "").strip()
+
+    def _task_has_retrievable_report(self, task_root: ElementTree.Element) -> bool:
+        report_id = self._task_report_id(task_root)
+        scan_end = self._task_scan_end(task_root)
+        finished_count = self._task_report_finished(task_root)
+
+        return bool(report_id and (scan_end or finished_count not in {"", "0"}))
+
+    def _stop_task(self, task_id: str) -> None:
+        try:
+            self._run_xml(f'<stop_task task_id="{task_id}"/>')
+            LOG.warning("Requested stop for Greenbone task %s", task_id)
+        except Exception as exc:
+            LOG.warning(
+                "Failed to stop Greenbone task %s after runner error: %s",
+                task_id,
+                exc,
+            )
+
+    def _wait_for_task_completion(self, task_id: str) -> tuple[str, str]:
         deadline = time.monotonic() + int(self.tool_config.get("global_timeout", 14400))
         poll_interval = int(self.tool_config.get("poll_interval_seconds", 15))
 
         while True:
-            root = self._run_xml(f'<get_tasks task_id="{task_id}" details="1"/>')
-            status = (root.findtext(".//task/status") or "").strip()
-            progress = (root.findtext(".//task/progress") or "").strip()
+            root = self._get_task_root(task_id)
+            status = self._task_status(root)
+            progress = self._task_progress(root)
+            report_id = self._task_report_id(root)
 
             LOG.info(
                 "Greenbone task %s status=%s progress=%s",
@@ -516,8 +563,17 @@ class GreenboneRunner(BaseRunner):
                 progress or "n/a",
             )
 
-            if status in DONE_STATUSES:
-                return
+            if status in SUCCESS_STATUSES:
+                return status, report_id
+
+            if status in REPORTABLE_STATUSES and self._task_has_retrievable_report(root):
+                LOG.warning(
+                    "Greenbone task %s ended with status=%s but has a retrievable "
+                    "report; continuing with report download",
+                    task_id,
+                    status,
+                )
+                return status, report_id
 
             if status in FAILED_STATUSES:
                 raise RunnerExecutionError(
@@ -530,6 +586,7 @@ class GreenboneRunner(BaseRunner):
                 )
 
             if time.monotonic() >= deadline:
+                self._stop_task(task_id)
                 raise RunnerExecutionError(
                     f"Greenbone task did not finish before timeout. Last status: {status}",
                     context={
@@ -546,11 +603,8 @@ class GreenboneRunner(BaseRunner):
         return ((root.findtext("report_id") or "") or (root.findtext(".//report_id") or "")).strip()
 
     def _report_id_for_task(self, task_id: str) -> str:
-        root = self._run_xml(f'<get_tasks task_id="{task_id}" details="1"/>')
-        report_node = root.find(".//task/last_report/report")
-        if report_node is None:
-            return ""
-        return (report_node.get("id") or "").strip()
+        root = self._get_task_root(task_id)
+        return self._task_report_id(root)
 
     def _write_csv_from_report(
         self,
@@ -642,60 +696,70 @@ class GreenboneRunner(BaseRunner):
 
         target_name = f"pipeline-target-{run_id}"
         task_name = f"pipeline-task-{run_id}"
+        task_id = ""
 
-        target_root = self._run_xml(
-            self._build_target_xml(
-                name=target_name,
-                targets=targets,
-                port_list_id=port_list_id,
+        try:
+            target_root = self._run_xml(
+                self._build_target_xml(
+                    name=target_name,
+                    targets=targets,
+                    port_list_id=port_list_id,
+                )
             )
-        )
-        target_id = (target_root.get("id") or "").strip()
-        if not target_id:
-            raise RunnerExecutionError(
-                "Greenbone did not return a target id",
-                context={"tool": self.tool_name},
+            target_id = (target_root.get("id") or "").strip()
+            if not target_id:
+                raise RunnerExecutionError(
+                    "Greenbone did not return a target id",
+                    context={"tool": self.tool_name},
+                )
+
+            task_root = self._run_xml(
+                self._build_task_xml(
+                    name=task_name,
+                    target_id=target_id,
+                    config_id=config_id,
+                    scanner_id=scanner_id,
+                )
+            )
+            task_id = (task_root.get("id") or "").strip()
+            if not task_id:
+                raise RunnerExecutionError(
+                    "Greenbone did not return a task id",
+                    context={"tool": self.tool_name},
+                )
+
+            start_root = self._run_xml(f'<start_task task_id="{task_id}"/>')
+            report_id = self._report_id_from_start_response(start_root)
+
+            _status, waited_report_id = self._wait_for_task_completion(task_id)
+
+            if not report_id:
+                report_id = waited_report_id
+
+            if not report_id:
+                report_id = self._report_id_for_task(task_id)
+
+            if not report_id:
+                raise RunnerExecutionError(
+                    "Greenbone did not return a report id for the completed task",
+                    context={"tool": self.tool_name, "task_id": task_id},
+                )
+
+            report_root = self._run_xml(
+                f'<get_reports report_id="{report_id}" ignore_pagination="1"/>',
+                timeout=int(self.tool_config.get("report_download_timeout", 300)),
             )
 
-        task_root = self._run_xml(
-            self._build_task_xml(
-                name=task_name,
-                target_id=target_id,
-                config_id=config_id,
-                scanner_id=scanner_id,
+            xml_out.write_text(
+                ElementTree.tostring(report_root, encoding="unicode"),
+                encoding="utf-8",
             )
-        )
-        task_id = (task_root.get("id") or "").strip()
-        if not task_id:
-            raise RunnerExecutionError(
-                "Greenbone did not return a task id",
-                context={"tool": self.tool_name},
-            )
+            self._write_csv_from_report(report_root, csv_out)
 
-        start_root = self._run_xml(f'<start_task task_id="{task_id}"/>')
-        report_id = self._report_id_from_start_response(start_root)
+            LOG.info("Greenbone runner produced %s", csv_out)
+            return [csv_out]
 
-        self._wait_for_task_completion(task_id)
-
-        if not report_id:
-            report_id = self._report_id_for_task(task_id)
-
-        if not report_id:
-            raise RunnerExecutionError(
-                "Greenbone did not return a report id for the completed task",
-                context={"tool": self.tool_name, "task_id": task_id},
-            )
-
-        report_root = self._run_xml(
-            f'<get_reports report_id="{report_id}" ignore_pagination="1"/>',
-            timeout=int(self.tool_config.get("report_download_timeout", 300)),
-        )
-
-        xml_out.write_text(
-            ElementTree.tostring(report_root, encoding="unicode"),
-            encoding="utf-8",
-        )
-        self._write_csv_from_report(report_root, csv_out)
-
-        LOG.info("Greenbone runner produced %s", csv_out)
-        return [csv_out]
+        except Exception:
+            if task_id:
+                self._stop_task(task_id)
+            raise
