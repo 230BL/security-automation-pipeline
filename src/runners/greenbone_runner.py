@@ -1,13 +1,12 @@
 """Greenbone/OpenVAS runner backed by GMP via gvm-cli.
 
 Behavior:
-- If Greenbone is explicitly allowed to stub, emit a deterministic stub CSV when
-  runtime requirements are missing.
-- If Greenbone is not allowed to stub, fail honestly when gvm-cli or required
-  GMP settings are missing.
+- No stubs.
+- If Greenbone runtime requirements are missing, fail honestly.
 - If Greenbone is configured, create a target and task through GMP, start the
   task, wait for completion, download the report, and convert it to the
   OpenVAS-style CSV shape already consumed by the pipeline.
+- A real scan with zero findings still produces a valid header-only CSV.
 """
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ class GreenboneRunner(BaseRunner):
         self.tool_config: dict[str, Any] = self.config.get("greenbone", {})
 
     def _allow_stub(self) -> bool:
-        return bool(self.tool_config.get("allow_stub", False))
+        return False
 
     def _runtime_settings(self) -> dict[str, str | None]:
         connection = (
@@ -164,13 +163,10 @@ class GreenboneRunner(BaseRunner):
         return issues
 
     def health_check(self) -> bool:
-        if self._allow_stub():
-            return True
         return not self._runtime_issues()
 
     def get_version(self) -> str:
-        settings = self._runtime_settings()
-        exe = settings["gvm_cli"]
+        exe = self._runtime_settings()["gvm_cli"]
 
         if exe is None:
             return "missing:gvm-cli"
@@ -185,16 +181,10 @@ class GreenboneRunner(BaseRunner):
                 check=False,
             )
         except Exception:
-            base_version = "gvm-cli"
-        else:
-            output = (result.stdout or result.stderr).strip()
-            base_version = output.splitlines()[0] if output else "gvm-cli"
+            return "gvm-cli"
 
-        issues = [issue for issue in self._runtime_issues() if issue != "gvm-cli is not installed"]
-        if issues:
-            return f"{base_version} (misconfigured: {issues[0]})"
-
-        return base_version
+        output = (result.stdout or result.stderr).strip()
+        return output.splitlines()[0] if output else "gvm-cli"
 
     def _base_command(self) -> list[str]:
         settings = self._runtime_settings()
@@ -214,7 +204,7 @@ class GreenboneRunner(BaseRunner):
                 "Missing Greenbone GMP username",
                 context={
                     "tool": self.tool_name,
-                    "expected": "greenbone.gmp_username or GREENBONE_GMP_USERNAME",
+                    "expected": ("greenbone.gmp_username or GREENBONE_GMP_USERNAME"),
                 },
             )
 
@@ -223,7 +213,7 @@ class GreenboneRunner(BaseRunner):
                 "Missing Greenbone GMP password",
                 context={
                     "tool": self.tool_name,
-                    "expected": "greenbone.gmp_password or GREENBONE_GMP_PASSWORD",
+                    "expected": ("greenbone.gmp_password or GREENBONE_GMP_PASSWORD"),
                 },
             )
 
@@ -508,23 +498,18 @@ class GreenboneRunner(BaseRunner):
 
             time.sleep(poll_interval)
 
-    def _write_stub_csv(self, targets: list[str], output_dir: Path) -> list[Path]:
-        run_id = self.context.run_metadata.run_id
-        out = output_dir / f"openvas_{run_id}.csv"
-        header = (
-            "IP,Hostname,Port,NVT Name,CVSS,Severity,Summary,Solution,CVEs,NVT OID,Specific Result"
-        )
-        max_hosts = int(self.tool_config.get("max_concurrent_hosts", 5))
+    def _report_id_from_start_response(
+        self,
+        root: ElementTree.Element,
+    ) -> str:
+        return ((root.findtext("report_id") or "") or (root.findtext(".//report_id") or "")).strip()
 
-        lines = [header]
-        for target in targets[:max_hosts]:
-            lines.append(
-                f"{target},,,Greenbone stub,0.0,Info,Stub output (no scan executed),,,STUB,"
-            )
-
-        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
-        LOG.warning("Greenbone runner produced stub output at %s", out)
-        return [out]
+    def _report_id_for_task(self, task_id: str) -> str:
+        root = self._run_xml(f'<get_tasks task_id="{task_id}" details="1"/>')
+        report_node = root.find(".//task/last_report/report")
+        if report_node is None:
+            return ""
+        return (report_node.get("id") or "").strip()
 
     def _write_csv_from_report(
         self,
@@ -603,16 +588,8 @@ class GreenboneRunner(BaseRunner):
 
         issues = self._runtime_issues()
         if issues:
-            message = "; ".join(issues)
-            if self._allow_stub():
-                LOG.warning(
-                    "Greenbone runtime is not ready; writing stub artifact. %s",
-                    message,
-                )
-                return self._write_stub_csv(targets, output_dir)
-
             raise RunnerExecutionError(
-                f"Greenbone is not configured correctly: {message}",
+                f"Greenbone is not configured correctly: {'; '.join(issues)}",
                 context={"tool": self.tool_name},
             )
 
@@ -655,14 +632,18 @@ class GreenboneRunner(BaseRunner):
             )
 
         start_root = self._run_xml(f'<start_task task_id="{task_id}"/>')
-        report_id = (start_root.findtext("report_id") or "").strip()
-        if not report_id:
-            raise RunnerExecutionError(
-                "Greenbone did not return a report id when starting the task",
-                context={"tool": self.tool_name, "task_id": task_id},
-            )
+        report_id = self._report_id_from_start_response(start_root)
 
         self._wait_for_task_completion(task_id)
+
+        if not report_id:
+            report_id = self._report_id_for_task(task_id)
+
+        if not report_id:
+            raise RunnerExecutionError(
+                "Greenbone did not return a report id for the completed task",
+                context={"tool": self.tool_name, "task_id": task_id},
+            )
 
         report_root = self._run_xml(
             f'<get_reports report_id="{report_id}" ignore_pagination="1"/>',
