@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -18,6 +19,13 @@ LOG = logging.getLogger(__name__)
 def _looks_like_web_target(target: str) -> bool:
     value = str(target).strip().lower()
     return value.startswith("http://") or value.startswith("https://")
+
+
+def _repair_nikto_json(raw: str) -> str:
+    repaired = raw
+    repaired = re.sub(r"}\s*{", "},{", repaired)
+    repaired = repaired.replace(r"[\,", "[")
+    return repaired
 
 
 class NiktoRunner(BaseRunner):
@@ -61,6 +69,8 @@ class NiktoRunner(BaseRunner):
         per_host = int(self.tool_config.get("timeout_per_host", 300))
         nikto_exe = shutil.which("nikto")
 
+        output_dir.mkdir(parents=True, exist_ok=True)
+
         for idx, target in enumerate(targets):
             out = output_dir / f"nikto_{idx}.json"
             stdout_log = output_dir / f"nikto_{idx}.stdout.log"
@@ -93,8 +103,8 @@ class NiktoRunner(BaseRunner):
                 f"{per_host}s",
                 "-nointeractive",
             ]
-
             LOG.info("Running: %s", " ".join(cmd_args)[:300])
+
             result = subprocess.run(
                 cmd_args,
                 capture_output=True,
@@ -107,36 +117,43 @@ class NiktoRunner(BaseRunner):
             stdout_log.write_text(result.stdout or "", encoding="utf-8")
             stderr_log.write_text(result.stderr or "", encoding="utf-8")
 
-            if result.returncode != 0:
-                stderr_text = (result.stderr or "").strip()
-                stdout_text = (result.stdout or "").strip()
-                output_text = out.read_text(encoding="utf-8").strip()
+            raw_output = out.read_text(encoding="utf-8").strip()
 
-                if not output_text or output_text in {"[]", "{}"}:
-                    raise RunnerExecutionError(
-                        f"Nikto failed (rc={result.returncode}): {stderr_text[:200]}",
-                        context={
-                            "stdout": stdout_text[:500],
-                            "stderr": stderr_text[:500],
-                        },
-                    )
-
-                LOG.warning(
-                    ("Nikto returned rc=%s for %s but produced a JSON report; continuing"),
-                    result.returncode,
-                    target,
+            if result.returncode != 0 and raw_output in {"", "[]", "{}"}:
+                raise RunnerExecutionError(
+                    f"Nikto failed (rc={result.returncode}): {(result.stderr or '').strip()[:200]}",
+                    context={
+                        "stdout": (result.stdout or "")[:500],
+                        "stderr": (result.stderr or "")[:500],
+                    },
                 )
 
-            else:
-                output_text = out.read_text(encoding="utf-8").strip()
-                if not output_text:
-                    out.write_text("[]", encoding="utf-8")
+            if not raw_output:
+                out.write_text("[]", encoding="utf-8")
+                artifacts.append(out)
+                continue
 
-                # Keep file valid JSON even if Nikto wrote malformed output.
+            try:
+                json.loads(raw_output)
+            except json.JSONDecodeError:
+                repaired = _repair_nikto_json(raw_output)
                 try:
-                    json.loads(out.read_text(encoding="utf-8"))
-                except json.JSONDecodeError:
-                    out.write_text("[]", encoding="utf-8")
+                    json.loads(repaired)
+                except json.JSONDecodeError as exc:
+                    corrupt_copy = output_dir / f"nikto_{idx}.json.corrupt"
+                    corrupt_copy.write_text(raw_output, encoding="utf-8")
+                    raise RunnerExecutionError(
+                        f"Nikto produced invalid JSON for {target}: {exc}",
+                        context={
+                            "artifact": str(out),
+                            "corrupt_copy": str(corrupt_copy),
+                            "stdout": (result.stdout or "")[:500],
+                            "stderr": (result.stderr or "")[:500],
+                        },
+                    ) from exc
+                else:
+                    out.write_text(repaired, encoding="utf-8")
+                    LOG.warning("Nikto JSON repaired for %s", target)
 
             artifacts.append(out)
 

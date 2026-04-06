@@ -1,3 +1,4 @@
+
 tool_defaults:
   nmap:
     max_rate: 500
@@ -17,9 +18,13 @@ tool_defaults:
       -iL {target_file}
 
   greenbone:
+    allow_stub: false
+    connection: socket
+    socket_path: /tmp/gvm/gvmd/gvmd.sock
     max_concurrent_hosts: 5
     max_concurrent_nvts: 4
     network_timeout: 40
+    report_download_timeout: 300
     global_timeout: 14400
 
   nikto:
