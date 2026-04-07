@@ -22,7 +22,7 @@ def _looks_like_web_target(target: str) -> bool:
 
 
 def _repair_nikto_json(raw: str) -> str:
-    repaired = raw
+    repaired = raw.strip()
     repaired = re.sub(r"}\s*{", "},{", repaired)
     repaired = repaired.replace(r"[\,", "[")
     return repaired
@@ -117,18 +117,26 @@ class NiktoRunner(BaseRunner):
             stdout_log.write_text(result.stdout or "", encoding="utf-8")
             stderr_log.write_text(result.stderr or "", encoding="utf-8")
 
-            raw_output = out.read_text(encoding="utf-8").strip()
+            raw_output = out.read_text(encoding="utf-8").strip() if out.exists() else ""
 
             if result.returncode != 0 and raw_output in {"", "[]", "{}"}:
                 raise RunnerExecutionError(
                     f"Nikto failed (rc={result.returncode}): {(result.stderr or '').strip()[:200]}",
                     context={
+                        "target": target,
+                        "artifact": str(out),
+                        "stdout_log": str(stdout_log),
+                        "stderr_log": str(stderr_log),
                         "stdout": (result.stdout or "")[:500],
                         "stderr": (result.stderr or "")[:500],
                     },
                 )
 
             if not raw_output:
+                LOG.warning(
+                    "Nikto completed for %s without JSON output; keeping empty artifact",
+                    target,
+                )
                 out.write_text("[]", encoding="utf-8")
                 artifacts.append(out)
                 continue
@@ -145,8 +153,11 @@ class NiktoRunner(BaseRunner):
                     raise RunnerExecutionError(
                         f"Nikto produced invalid JSON for {target}: {exc}",
                         context={
+                            "target": target,
                             "artifact": str(out),
                             "corrupt_copy": str(corrupt_copy),
+                            "stdout_log": str(stdout_log),
+                            "stderr_log": str(stderr_log),
                             "stdout": (result.stdout or "")[:500],
                             "stderr": (result.stderr or "")[:500],
                         },

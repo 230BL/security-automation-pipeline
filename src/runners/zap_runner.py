@@ -3,7 +3,8 @@
 Governance:
 - Active scans are allowed in staging/lab only.
 - Runner produces XML report artifacts.
-- When Docker image is unavailable or target is not a web URL, produces a stub.
+- When Docker image is unavailable or target is not a web URL, produces a
+  non-breaking empty XML report.
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ ZAP_IMAGE = "ghcr.io/zaproxy/zaproxy:stable"
 
 def _empty_zap_report_xml() -> str:
     return (
-        '<?xml version="1.0" encoding="UTF-8"?><OWASPZAPReport version="2.15.0"></OWASPZAPReport>\n'
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<OWASPZAPReport version="2.15.0"></OWASPZAPReport>\n'
     )
 
 
@@ -55,8 +57,10 @@ class ZapRunner(BaseRunner):
                 text=True,
                 shell=False,
                 timeout=10,
+                check=False,
             )
-            return result.stdout.strip() or "docker"
+            output = (result.stdout or result.stderr).strip()
+            return output or "docker"
         except (OSError, subprocess.SubprocessError):
             return "unknown"
 
@@ -69,6 +73,7 @@ class ZapRunner(BaseRunner):
                 text=True,
                 shell=False,
                 timeout=10,
+                check=False,
             )
             return result.returncode == 0
         except (OSError, subprocess.SubprocessError):
@@ -79,8 +84,7 @@ class ZapRunner(BaseRunner):
         output_dir.mkdir(parents=True, exist_ok=True)
         return str(output_dir.resolve())
 
-    def _prepare_report_file(self, out: Path) -> None:
-        """Create a stub report so the pipeline always has a valid XML artifact."""
+    def _write_empty_report(self, out: Path) -> None:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(_empty_zap_report_xml(), encoding="utf-8")
 
@@ -100,18 +104,28 @@ class ZapRunner(BaseRunner):
 
         for idx, target in enumerate(targets):
             out = output_dir / f"zap_{idx}.xml"
-            self._prepare_report_file(out)
+            stdout_log = output_dir / f"zap_{idx}.stdout.log"
+            stderr_log = output_dir / f"zap_{idx}.stderr.log"
 
             if not _is_web_target(target):
                 LOG.warning(
                     "ZAP skipping non-web target '%s' (needs http:// or https://)",
                     target,
                 )
+                self._write_empty_report(out)
+                stdout_log.write_text("", encoding="utf-8")
+                stderr_log.write_text(
+                    "Skipped non-web target; ZAP requires http:// or https://\n",
+                    encoding="utf-8",
+                )
                 artifacts.append(out)
                 continue
 
             if not docker_exe:
-                LOG.warning("Docker not found; ZAP producing stub for %s", target)
+                LOG.warning("Docker not found; ZAP producing empty report for %s", target)
+                self._write_empty_report(out)
+                stdout_log.write_text("", encoding="utf-8")
+                stderr_log.write_text("Docker executable not found\n", encoding="utf-8")
                 artifacts.append(out)
                 continue
 
@@ -120,6 +134,12 @@ class ZapRunner(BaseRunner):
                     "ZAP image '%s' not found locally. Pull it manually with: docker pull %s",
                     ZAP_IMAGE,
                     ZAP_IMAGE,
+                )
+                self._write_empty_report(out)
+                stdout_log.write_text("", encoding="utf-8")
+                stderr_log.write_text(
+                    f"ZAP image not available locally: {ZAP_IMAGE}\n",
+                    encoding="utf-8",
                 )
                 artifacts.append(out)
                 continue
@@ -164,16 +184,38 @@ class ZapRunner(BaseRunner):
                 text=True,
                 shell=False,
                 timeout=timeout,
+                check=False,
             )
+
+            stdout_log.write_text(result.stdout or "", encoding="utf-8")
+            stderr_log.write_text(result.stderr or "", encoding="utf-8")
 
             if result.returncode != 0:
                 raise RunnerExecutionError(
-                    f"ZAP failed (rc={result.returncode}): {result.stderr[:200]}",
+                    f"ZAP failed (rc={result.returncode}): {(result.stderr or '')[:200]}",
                     context={
-                        "stdout": result.stdout[:500],
-                        "stderr": result.stderr[:500],
+                        "target": target,
+                        "stdout": (result.stdout or "")[:500],
+                        "stderr": (result.stderr or "")[:500],
+                        "stdout_log": str(stdout_log),
+                        "stderr_log": str(stderr_log),
                     },
                 )
+
+            if not out.exists():
+                LOG.warning(
+                    "ZAP completed for %s without XML output; keeping empty report artifact",
+                    target,
+                )
+                self._write_empty_report(out)
+            else:
+                content = out.read_text(encoding="utf-8").strip()
+                if not content:
+                    LOG.warning(
+                        "ZAP completed for %s with empty XML output; keeping empty report artifact",
+                        target,
+                    )
+                    self._write_empty_report(out)
 
             artifacts.append(out)
 

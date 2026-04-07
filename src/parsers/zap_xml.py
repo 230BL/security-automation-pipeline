@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from xml.etree.ElementTree import Element
 
@@ -12,7 +13,13 @@ from src.parsers.models import Finding
 
 LOG = logging.getLogger(__name__)
 
-ZAP_RISK_MAP: dict[str, str] = {"0": "Info", "1": "Low", "2": "Medium", "3": "High"}
+ZAP_RISK_MAP: dict[str, str] = {
+    "0": "Info",
+    "1": "Low",
+    "2": "Medium",
+    "3": "High",
+}
+HTML_TAG_RE = re.compile(r"<[^>]+>")
 
 
 def parse_zap_xml(path: Path) -> list[Finding]:
@@ -95,7 +102,9 @@ def parse_zap_xml(path: Path) -> list[Finding]:
                     )
             except Exception as exc:
                 LOG.warning("Skipping malformed alert in %s: %s", path.name, exc)
-                continue
+
+    if not findings and content:
+        LOG.info("ZAP XML parsed successfully but contained no findings: %s", path)
 
     LOG.info("Parsed %d findings from ZAP XML: %s", len(findings), path.name)
     return findings
@@ -109,6 +118,4 @@ def _text(elem: Element, tag: str, default: str = "") -> str:
 
 
 def _clean_html(text: str) -> str:
-    import re
-
-    return re.sub(r"<[^>]+>", "", text).strip()
+    return HTML_TAG_RE.sub("", text).strip()

@@ -96,6 +96,27 @@ def _finding_from_vuln(
     )
 
 
+def _normalize_top_level_items(data: Any) -> list[Any]:
+    if isinstance(data, list):
+        return data
+
+    if isinstance(data, dict):
+        hosts = data.get("hosts")
+        if isinstance(hosts, list):
+            return hosts
+        return [data]
+
+    return []
+
+
+def _normalize_vulnerabilities(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [value]
+    return []
+
+
 def parse_nikto_json(path: Path) -> list[Finding]:
     """Parse Nikto JSON report."""
 
@@ -114,7 +135,7 @@ def parse_nikto_json(path: Path) -> list[Finding]:
         LOG.error("Failed to parse Nikto JSON %s: %s", path, exc)
         return []
 
-    items = data if isinstance(data, list) else [data]
+    items = _normalize_top_level_items(data)
     findings: list[Finding] = []
 
     fallback_host_ip = "unknown"
@@ -132,13 +153,9 @@ def parse_nikto_json(path: Path) -> list[Finding]:
 
         if "vulnerabilities" in item:
             host_ip, host_port, target_host = _host_meta(item)
-            vulnerabilities = item.get("vulnerabilities", [])
-            if not isinstance(vulnerabilities, list):
-                continue
+            vulnerabilities = _normalize_vulnerabilities(item.get("vulnerabilities"))
 
             for vuln in vulnerabilities:
-                if not isinstance(vuln, dict):
-                    continue
                 try:
                     findings.append(
                         _finding_from_vuln(
@@ -156,7 +173,7 @@ def parse_nikto_json(path: Path) -> list[Finding]:
                     )
             continue
 
-        if "id" in item and ("msg" in item or "message" in item or "url" in item):
+        if "id" in item and ("msg" in item or "message" in item or "url" in item or "uri" in item):
             try:
                 findings.append(
                     _finding_from_vuln(
@@ -172,6 +189,12 @@ def parse_nikto_json(path: Path) -> list[Finding]:
                     path.name,
                     exc,
                 )
+
+    if not findings and content not in {"[]", "{}"}:
+        LOG.warning(
+            "Nikto JSON parsed but no supported vulnerability structures were found: %s",
+            path,
+        )
 
     LOG.info("Parsed %d findings from Nikto JSON: %s", len(findings), path.name)
     return findings
