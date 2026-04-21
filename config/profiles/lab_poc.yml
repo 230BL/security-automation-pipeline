@@ -6,6 +6,9 @@ run_profile:
   stop_on_scope_mismatch: true
   stop_on_window_expiry: false
 
+greenbone:
+  credential_id: 2da448c5-2b61-4b59-9660-3cc5a0ad41f5
+
 phases:
   - name: inventory
     enabled: true
@@ -24,7 +27,7 @@ phases:
     runners: [lynis]
 
   - name: web_checks
-    enabled: true #false  Only enable if you have the resources to run these checks
+    enabled: true # false  Only enable if you have the resources to run these checks
     allowed_environments: [staging, lab]
     runners: [zap, nikto, nuclei]
 
@@ -37,3 +40,4 @@ workflow:
   index_opensearch: false
   create_tickets: false
   deduplicate: true
+  
