@@ -1,0 +1,20 @@
+<?xml version="1.0" ?>
+<!DOCTYPE niktoscan PUBLIC "-//CIRT//DTD Nikto//EN" "https://www.cirt.net/nikto/docs/nikto.dtd">
+<niktoscan options="-h http://192.168.56.10/ -Format xml" version="2.5.0" hostreport="1" nxmlversion="1.2">
+  <niktoscan>
+    <scandetails targetip="192.168.56.10" targethostname="192.168.56.10" targetport="80" targetbanner="Apache/2.2.8" starttime="2026-04-21 09:30:00" sitename="http://192.168.56.10/" siteip="http://192.168.56.10:80/" hostheader="192.168.56.10" errors="0" checks="6955">
+      <item id="999970" osvdbid="0" osvdblink="" method="HEAD">
+        <description><![CDATA[Retrieved x-powered-by header: PHP/5.2.4-2ubuntu5.10]]></description>
+        <uri><![CDATA[/]]></uri>
+        <namelink><![CDATA[http://192.168.56.10:80/]]></namelink>
+        <iplink><![CDATA[http://192.168.56.10:80/]]></iplink>
+      </item>
+      <item id="600575" osvdbid="12184" osvdblink="https://osvdb.org/12184" method="GET">
+        <description><![CDATA[/phpMyAdmin/: phpMyAdmin directory found]]></description>
+        <uri><![CDATA[/phpMyAdmin/]]></uri>
+        <namelink><![CDATA[http://192.168.56.10:80/phpMyAdmin/]]></namelink>
+        <iplink><![CDATA[http://192.168.56.10:80/phpMyAdmin/]]></iplink>
+      </item>
+    </scandetails>
+  </niktoscan>
+</niktoscan>

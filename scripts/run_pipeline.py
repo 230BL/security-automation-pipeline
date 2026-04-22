@@ -34,7 +34,7 @@ from src.orchestrator.exceptions import RunnerExecutionError  # noqa: E402
 from src.orchestrator.gate import run_gate  # noqa: E402
 from src.orchestrator.run_state import RunState  # noqa: E402
 from src.parsers.lynis_dat import parse_lynis_dat  # noqa: E402
-from src.parsers.nikto_json import parse_nikto_json  # noqa: E402
+from src.parsers.nikto_xml import parse_nikto_xml  # noqa: E402
 from src.parsers.nmap_xml import parse_nmap_xml  # noqa: E402
 from src.parsers.normalize import normalize  # noqa: E402
 from src.parsers.nuclei_jsonl import parse_nuclei_jsonl  # noqa: E402
@@ -145,7 +145,7 @@ def _parse_artifact(tool: str, artifact: Path) -> list[Any]:
     if tool == "zap":
         return parse_zap_xml(artifact)
     if tool == "nikto":
-        return parse_nikto_json(artifact)
+        return parse_nikto_xml(artifact)
     if tool == "wazuh":
         findings = parse_wazuh_vulnerabilities(artifact)
         findings += parse_wazuh_sca(artifact)

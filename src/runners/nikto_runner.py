@@ -1,10 +1,16 @@
-"""Nikto runner for web server misconfiguration checks."""
+"""Nikto runner for web server misconfiguration checks.
+
+Output format: XML (``-Format xml``).
+
+Rationale: Nikto's JSON report plugin is broken in current portable builds
+(crashes at nikto_report_json.plugin line 113 after producing real scan
+results).  The XML reporter works correctly.  Downstream parsing uses
+``parse_nikto_xml`` instead of the old ``parse_nikto_json``.
+"""
 
 from __future__ import annotations
 
-import json
 import logging
-import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,21 +21,16 @@ from src.runners.base import BaseRunner
 
 LOG = logging.getLogger(__name__)
 
+_EMPTY_XML = '<?xml version="1.0" ?>\n<niktoscan>\n  <niktoscan>\n  </niktoscan>\n</niktoscan>\n'
+
 
 def _looks_like_web_target(target: str) -> bool:
     value = str(target).strip().lower()
     return value.startswith("http://") or value.startswith("https://")
 
 
-def _repair_nikto_json(raw: str) -> str:
-    repaired = raw.strip()
-    repaired = re.sub(r"}\s*{", "},{", repaired)
-    repaired = repaired.replace(r"[\,", "[")
-    return repaired
-
-
 class NiktoRunner(BaseRunner):
-    """Run Nikto and store JSON artifacts compatible with parse_nikto_json."""
+    """Run Nikto and store XML artifacts compatible with ``parse_nikto_xml``."""
 
     tool_name = "nikto"
 
@@ -72,11 +73,12 @@ class NiktoRunner(BaseRunner):
         output_dir.mkdir(parents=True, exist_ok=True)
 
         for idx, target in enumerate(targets):
-            out = output_dir / f"nikto_{idx}.json"
+            out = output_dir / f"nikto_{idx}.xml"
             stdout_log = output_dir / f"nikto_{idx}.stdout.log"
             stderr_log = output_dir / f"nikto_{idx}.stderr.log"
 
-            out.write_text("[]", encoding="utf-8")
+            # Pre-write a valid empty XML so the artifact always exists
+            out.write_text(_EMPTY_XML, encoding="utf-8")
 
             if not _looks_like_web_target(target):
                 LOG.warning(
@@ -87,7 +89,7 @@ class NiktoRunner(BaseRunner):
                 continue
 
             if not nikto_exe:
-                LOG.warning("Nikto not found; producing empty JSON artifact for %s", target)
+                LOG.warning("Nikto not found; producing empty XML artifact for %s", target)
                 artifacts.append(out)
                 continue
 
@@ -96,7 +98,7 @@ class NiktoRunner(BaseRunner):
                 "-h",
                 target,
                 "-Format",
-                "json",
+                "xml",
                 "-o",
                 str(out),
                 "-maxtime",
@@ -117,9 +119,13 @@ class NiktoRunner(BaseRunner):
             stdout_log.write_text(result.stdout or "", encoding="utf-8")
             stderr_log.write_text(result.stderr or "", encoding="utf-8")
 
-            raw_output = out.read_text(encoding="utf-8").strip() if out.exists() else ""
+            # Nikto exit code is unreliable (returns 255 or 1 even on success).
+            # Only treat a non-zero code as a hard failure when the output file
+            # is still the pre-written empty placeholder.
+            out_content = out.read_text(encoding="utf-8").strip() if out.exists() else ""
+            produced_real_output = out_content not in {"", _EMPTY_XML.strip()}
 
-            if result.returncode != 0 and raw_output in {"", "[]", "{}"}:
+            if result.returncode != 0 and not produced_real_output:
                 raise RunnerExecutionError(
                     f"Nikto failed (rc={result.returncode}): {(result.stderr or '').strip()[:200]}",
                     context={
@@ -132,39 +138,12 @@ class NiktoRunner(BaseRunner):
                     },
                 )
 
-            if not raw_output:
+            if not out_content:
                 LOG.warning(
-                    "Nikto completed for %s without JSON output; keeping empty artifact",
+                    "Nikto completed for %s without XML output; keeping empty artifact",
                     target,
                 )
-                out.write_text("[]", encoding="utf-8")
-                artifacts.append(out)
-                continue
-
-            try:
-                json.loads(raw_output)
-            except json.JSONDecodeError:
-                repaired = _repair_nikto_json(raw_output)
-                try:
-                    json.loads(repaired)
-                except json.JSONDecodeError as exc:
-                    corrupt_copy = output_dir / f"nikto_{idx}.json.corrupt"
-                    corrupt_copy.write_text(raw_output, encoding="utf-8")
-                    raise RunnerExecutionError(
-                        f"Nikto produced invalid JSON for {target}: {exc}",
-                        context={
-                            "target": target,
-                            "artifact": str(out),
-                            "corrupt_copy": str(corrupt_copy),
-                            "stdout_log": str(stdout_log),
-                            "stderr_log": str(stderr_log),
-                            "stdout": (result.stdout or "")[:500],
-                            "stderr": (result.stderr or "")[:500],
-                        },
-                    ) from exc
-                else:
-                    out.write_text(repaired, encoding="utf-8")
-                    LOG.warning("Nikto JSON repaired for %s", target)
+                out.write_text(_EMPTY_XML, encoding="utf-8")
 
             artifacts.append(out)
 
