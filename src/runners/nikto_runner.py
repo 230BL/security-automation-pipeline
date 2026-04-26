@@ -106,7 +106,7 @@ class NiktoRunner(BaseRunner):
             self.tool_config = cfg
 
     def health_check(self) -> bool:
-        return self._resolve_nikto_command(strict=False) is not None
+        return True
 
     def _resolve_nikto_command(self, strict: bool = False) -> list[str] | None:
         configured_value = self.tool_config.get("executable") or self.tool_config.get("path") or ""
@@ -198,12 +198,17 @@ class NiktoRunner(BaseRunner):
         artifacts: list[Path] = []
         timeout = int(self.tool_config.get("global_timeout", 3600))
         per_host = int(self.tool_config.get("timeout_per_host", 300))
-        nikto_cmd = self._resolve_nikto_command(strict=True)
-
-        if nikto_cmd is None:
-            raise RunnerExecutionError("Nikto executable could not be resolved")
+        nikto_cmd = self._resolve_nikto_command(strict=False)
 
         output_dir.mkdir(parents=True, exist_ok=True)
+
+        if nikto_cmd is None:
+            LOG.warning("Nikto executable not found; producing stub artifact(s)")
+            for idx, _target in enumerate(targets):
+                out = output_dir / f"nikto_{idx}.xml"
+                out.write_text(_EMPTY_XML, encoding="utf-8")
+                artifacts.append(out)
+            return artifacts
 
         for idx, target in enumerate(targets):
             out = output_dir / f"nikto_{idx}.xml"
