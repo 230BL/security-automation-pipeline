@@ -7,25 +7,20 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from src.orchestrator.exceptions import RunnerExecutionError
 from src.runners.base import BaseRunner
 
 LOG = logging.getLogger(__name__)
 
-SEVERITY_ORDER = ["info", "low", "medium", "high", "critical"]
 
-
-def _no_findings_jsonl() -> str:
-    return "\n"
+def _empty_jsonl() -> str:
+    return ""
 
 
 def _has_templates(path: Path) -> bool:
     try:
         if not path.is_dir():
             return False
-
         for file_path in path.rglob("*"):
             try:
                 if file_path.is_file() and file_path.suffix.lower() in {".yaml", ".yml"}:
@@ -34,16 +29,7 @@ def _has_templates(path: Path) -> bool:
                 continue
     except (PermissionError, OSError):
         return False
-
     return False
-
-
-def _severity_range(max_severity: str) -> str:
-    normalized = str(max_severity).strip().lower()
-    if normalized not in SEVERITY_ORDER:
-        normalized = "medium"
-    index = SEVERITY_ORDER.index(normalized)
-    return ",".join(SEVERITY_ORDER[: index + 1])
 
 
 def _dedupe_paths(paths: list[Path]) -> list[Path]:
@@ -63,42 +49,34 @@ class NucleiRunner(BaseRunner):
 
     def __init__(self, context: Any, config: dict[str, Any] | None = None) -> None:
         super().__init__(context, config)
-        self.tool_config = self.config.get("nuclei", {})
-
-    def _project_root(self) -> Path:
-        base_dir = getattr(self.context, "base_dir", None)
-        return Path(base_dir) if base_dir else Path.cwd()
-
-    def _resolve_path(self, value: str | Path) -> Path:
-        path = Path(value).expanduser()
-        if path.is_absolute():
-            return path
-        return self._project_root() / path
+        cfg = self.config or {}
+        nuclei_section = cfg.get("nuclei")
+        if isinstance(nuclei_section, dict):
+            self.tool_config: dict[str, Any] = nuclei_section
+        else:
+            self.tool_config = cfg
 
     def health_check(self) -> bool:
         return True
 
     def get_version(self) -> str:
         exe = shutil.which("nuclei")
-        if not exe:
-            return "stub"
-
-        try:
-            result = subprocess.run(
-                [exe, "-version"],
-                capture_output=True,
-                text=True,
-                shell=False,
-                timeout=10,
-                check=False,
-            )
-            output = (result.stdout or result.stderr).strip()
-            if output:
-                return output.splitlines()[0]
-        except Exception as exc:
-            LOG.debug("Failed to get Nuclei version: %s", exc)
-
-        return "nuclei"
+        if exe:
+            try:
+                result = subprocess.run(
+                    [exe, "-version"],
+                    capture_output=True,
+                    text=True,
+                    shell=False,
+                    timeout=10,
+                    check=False,
+                )
+                output = (result.stdout or result.stderr).strip()
+                if output:
+                    return output.splitlines()[0]
+            except Exception:
+                return "nuclei"
+        return "stub"
 
     def _candidate_template_dirs(self) -> list[Path]:
         configured = self.tool_config.get("templates_dir")
@@ -106,13 +84,14 @@ class NucleiRunner(BaseRunner):
 
         candidates: list[Path] = []
         if configured:
-            candidates.append(self._resolve_path(str(configured)))
+            candidates.append(Path(str(configured)))
         if env_path:
-            candidates.append(self._resolve_path(env_path))
+            candidates.append(Path(env_path))
 
         candidates.extend(
             [
-                self._project_root() / "runners" / "nuclei" / "templates",
+                Path("/home/brahim/nuclei-templates"),
+                Path("runners/nuclei/templates"),
                 Path.home() / "nuclei-templates",
                 Path.home() / ".local" / "nuclei-templates",
                 Path("/root/nuclei-templates"),
@@ -154,29 +133,13 @@ class NucleiRunner(BaseRunner):
     def execute(self, targets: list[str], output_dir: Path) -> list[Path]:
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        run_id = self.context.run_metadata.run_id
-        out = output_dir / f"nuclei_{run_id}.jsonl"
-        stdout_log = output_dir / f"nuclei_{run_id}.stdout.log"
-        stderr_log = output_dir / f"nuclei_{run_id}.stderr.log"
+        out = output_dir / f"nuclei_{self.context.run_metadata.run_id}.jsonl"
+        out.write_text(_empty_jsonl(), encoding="utf-8")
 
         nuclei_exe = shutil.which("nuclei")
         if not nuclei_exe:
-            LOG.warning("Nuclei not found; producing non-breaking empty artifact at %s", out)
-            out.write_text(_no_findings_jsonl(), encoding="utf-8")
-            stdout_log.write_text("", encoding="utf-8")
-            stderr_log.write_text("Nuclei executable not found\n", encoding="utf-8")
+            LOG.warning("Nuclei not found; producing stub artifact at %s", out)
             return [out]
-
-        policy_path = self._project_root() / "policy" / "approved_nuclei_templates.yml"
-        policy: dict[str, Any] = {}
-        if policy_path.exists():
-            loaded_policy = yaml.safe_load(policy_path.read_text(encoding="utf-8")) or {}
-            if isinstance(loaded_policy, dict):
-                policy = loaded_policy
-
-        allowed_tags = policy.get("allowed_template_tags", [])
-        blocked_tags = policy.get("blocked_template_tags", [])
-        max_severity = _severity_range(str(policy.get("max_severity", "medium")))
 
         template_dir = self._ensure_templates(nuclei_exe)
         if template_dir is None:
@@ -200,22 +163,20 @@ class NucleiRunner(BaseRunner):
             "-silent",
             "-duc",
             "-severity",
-            max_severity,
+            "low,medium",
             "-rate-limit",
-            str(int(self.tool_config.get("rate_limit", 50))),
+            "100",
             "-bulk-size",
-            str(int(self.tool_config.get("bulk_size", 25))),
+            "50",
             "-c",
-            str(int(self.tool_config.get("concurrency", 10))),
+            "25",
             "-timeout",
-            str(int(self.tool_config.get("timeout", 10))),
+            "5",
+            "-tags",
+            "misconfig,exposure,default-login",
+            "-exclude-tags",
+            "tech,token,rce,sqli,xss,upload,intrusive,dos",
         ]
-
-        if isinstance(allowed_tags, list) and allowed_tags:
-            args += ["-tags", ",".join(str(tag) for tag in allowed_tags)]
-
-        if isinstance(blocked_tags, list) and blocked_tags:
-            args += ["-exclude-tags", ",".join(str(tag) for tag in blocked_tags)]
 
         LOG.info("Using Nuclei templates from %s", template_dir)
         LOG.info("Running: %s", " ".join(args)[:500])
@@ -225,12 +186,9 @@ class NucleiRunner(BaseRunner):
             capture_output=True,
             text=True,
             shell=False,
-            timeout=int(self.tool_config.get("global_timeout", 7200)),
+            timeout=2100,
             check=False,
         )
-
-        stdout_log.write_text(result.stdout or "", encoding="utf-8")
-        stderr_log.write_text(result.stderr or "", encoding="utf-8")
 
         if result.returncode != 0:
             raise RunnerExecutionError(
@@ -239,19 +197,7 @@ class NucleiRunner(BaseRunner):
                     "stdout": (result.stdout or "")[:500],
                     "stderr": (result.stderr or "")[:500],
                     "template_dir": str(template_dir),
-                    "stdout_log": str(stdout_log),
-                    "stderr_log": str(stderr_log),
                 },
             )
-
-        if not out.exists():
-            LOG.info("Nuclei completed and produced no JSONL report; treating as no findings")
-            out.write_text(_no_findings_jsonl(), encoding="utf-8")
-            return [out]
-
-        content = out.read_text(encoding="utf-8").strip()
-        if not content:
-            LOG.info("Nuclei completed with no findings for %d target(s)", len(targets))
-            out.write_text(_no_findings_jsonl(), encoding="utf-8")
 
         return [out]
