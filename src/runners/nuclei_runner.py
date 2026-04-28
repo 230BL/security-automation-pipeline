@@ -12,6 +12,8 @@ from src.runners.base import BaseRunner
 
 LOG = logging.getLogger(__name__)
 
+_MAX_TIMEOUT = 2100  # 35-minute hard cap — Nuclei stalls after its productive phase
+
 
 def _empty_jsonl() -> str:
     return ""
@@ -29,6 +31,19 @@ def _has_templates(path: Path) -> bool:
                 continue
     except (PermissionError, OSError):
         return False
+    return False
+
+
+def _artifact_has_data(path: Path) -> bool:
+    """Return True if the JSONL artifact exists and has at least one non-empty line."""
+    try:
+        if not path.exists() or path.stat().st_size == 0:
+            return False
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            if line.strip():
+                return True
+    except OSError:
+        pass
     return False
 
 
@@ -148,6 +163,12 @@ class NucleiRunner(BaseRunner):
                 "'nuclei -update-templates'."
             )
 
+        # Hard cap: min() allows smaller configured values but prevents accidental
+        # override above 35 minutes. Nuclei finishes its productive phase ~29 min then stalls.
+        timeout_seconds = min(
+            int(self.tool_config.get("global_timeout", _MAX_TIMEOUT)), _MAX_TIMEOUT
+        )
+
         target_file = output_dir / "targets.txt"
         target_file.write_text("\n".join(targets), encoding="utf-8")
 
@@ -179,18 +200,39 @@ class NucleiRunner(BaseRunner):
         ]
 
         LOG.info("Using Nuclei templates from %s", template_dir)
-        LOG.info("Running: %s", " ".join(args)[:500])
+        LOG.info("Running (timeout=%ds): %s", timeout_seconds, " ".join(args)[:500])
 
-        result = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            shell=False,
-            timeout=2100,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                shell=False,
+                timeout=timeout_seconds,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            if _artifact_has_data(out):
+                LOG.warning(
+                    "Nuclei timed out after %ds but artifact already contains findings; "
+                    "keeping partial results and continuing pipeline.",
+                    timeout_seconds,
+                )
+                return [out]
+
+            raise RunnerExecutionError(
+                f"Nuclei timed out after {timeout_seconds}s and produced no usable output.",
+                context={"template_dir": str(template_dir), "timeout": timeout_seconds},
+            ) from None
 
         if result.returncode != 0:
+            if _artifact_has_data(out):
+                LOG.warning(
+                    "Nuclei exited with rc=%d but artifact contains findings; "
+                    "keeping partial results and continuing pipeline.",
+                    result.returncode,
+                )
+                return [out]
             raise RunnerExecutionError(
                 f"Nuclei failed (rc={result.returncode}): {(result.stderr or '')[:200]}",
                 context={

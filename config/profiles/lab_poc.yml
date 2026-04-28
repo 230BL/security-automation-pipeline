@@ -21,7 +21,7 @@ phases:
     runners: [inventory, osquery]
 
   - name: service_validation
-    enabled: false
+    enabled: true
     runners: [nmap]
 
   - name: authenticated_vuln
@@ -29,13 +29,13 @@ phases:
     runners: [greenbone]
 
   - name: config_audit
-    enabled: false
+    enabled: true
     runners: [lynis]
 
   - name: web_checks
     enabled: true # false  Only enable if you have the resources to run these checks
     allowed_environments: [staging, lab]
-    runners: [nuclei] #zap, nikto, 
+    runners: [zap, nikto, nuclei] #zap, nikto, 
 
   - name: cloud_posture
     enabled: false
