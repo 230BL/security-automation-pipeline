@@ -21,34 +21,46 @@ lynis:
   global_timeout: 1800
 
 phases:
-  - name: inventory
-    enabled: true
-    runners: [inventory, osquery]
+- name: inventory
+  enabled: true
+  runners:
+  - inventory
+  - osquery
+  
+- name: service_validation
+  enabled: true
+  runners:
+  - nmap
 
-  - name: service_validation
-    enabled: false
-    runners: [nmap]
+- name: authenticated_vuln
+  enabled: false
+  runners:
+  - greenbone
 
-  - name: authenticated_vuln
-    enabled: false
-    runners: [greenbone]
+- name: config_audit
+  enabled: true
+  runners:
+  - lynis
 
-  - name: config_audit
-    enabled: true
-    runners: [lynis]
+- name: web_checks
+  enabled: true
+  allowed_environments:
+  - staging
+  - lab
 
-  - name: web_checks
-    enabled: false 
-    allowed_environments: [staging, lab]
-    runners: [zap, nikto, nuclei] #zap, nikto, 
+  runners:
+  - zap
+  - nikto
+  - nuclei
 
-  - name: cloud_posture
-    enabled: false
-    runners: [prowler, scoutsuite]
+- name: cloud_posture
+  enabled: false
+  runners:
+  - prowler
+  - scoutsuite
 
 workflow:
   import_defectdojo: true
-  index_opensearch: false
+  index_opensearch: true
   create_tickets: false
   deduplicate: true
-  

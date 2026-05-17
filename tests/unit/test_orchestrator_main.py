@@ -19,7 +19,13 @@ class _DummyRunMetadata:
         self.run_id = run_id
 
     def to_dict(self) -> dict[str, str]:
-        return {"run_id": self.run_id}
+        return {
+            "run_id": self.run_id,
+            "status": "INITIALIZED",
+            "end_time": "",
+            "phases_completed": "",
+            "artifact_paths": "",
+        }
 
 
 def _make_ctx(targets: list[str]) -> Any:
@@ -56,6 +62,29 @@ class _RecordingState:
     def mark_failed(self, phase_name: str, reason: str) -> None:
         self.events.append(("failed", phase_name, reason))
 
+    def get_completed_phases(self) -> list[str]:
+        return [event[1] for event in self.events if event[0] == "complete"]
+
+    def get_artifacts(self, phase_name: str) -> list[str]:
+        for event in self.events:
+            if event[0] == "complete" and event[1] == phase_name:
+                artifacts = event[2]
+                if isinstance(artifacts, list):
+                    return [str(artifact) for artifact in artifacts]
+        return []
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "phases": {
+                event[1]: {
+                    "status": event[0],
+                    "artifacts": event[2],
+                }
+                for event in self.events
+            },
+        }
+
 
 def _patch_common(
     monkeypatch: pytest.MonkeyPatch,
@@ -84,31 +113,38 @@ def _patch_common(
     def fake_load_yaml(path: Path) -> dict[str, Any]:
         if path == profile_path:
             return profile_cfg
+
         if path.name == "tools.yml":
             return {"tool_defaults": {}}
+
         if path.name == "orchestrator.yml":
             return {}
+
         return {}
 
     monkeypatch.setattr(rp, "_load_yaml", fake_load_yaml)
+
     return profile_path
 
 
 def test_load_yaml_reads_mapping(tmp_path: Path) -> None:
     path = tmp_path / "config.yml"
     path.write_text("key: value\ncount: 2\n", encoding="utf-8")
+
     assert rp._load_yaml(path) == {"key": "value", "count": 2}
 
 
 def test_load_yaml_empty_returns_empty_dict(tmp_path: Path) -> None:
     path = tmp_path / "config.yml"
     path.write_text("", encoding="utf-8")
+
     assert rp._load_yaml(path) == {}
 
 
 def test_load_yaml_non_mapping_returns_empty(tmp_path: Path) -> None:
     path = tmp_path / "config.yml"
     path.write_text("- one\n- two\n", encoding="utf-8")
+
     assert rp._load_yaml(path) == {}
 
 
@@ -157,7 +193,8 @@ def test_parse_artifacts_raises_for_empty_artifact(tmp_path: Path) -> None:
 
 
 def test_parse_artifacts_wazuh_combines_both_parsers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = tmp_path / "wazuh.json"
     artifact.write_text('{"ok": true}', encoding="utf-8")
@@ -179,10 +216,11 @@ def test_parse_artifacts_wazuh_combines_both_parsers(
 
 
 def test_parse_artifacts_wraps_parser_errors(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     artifact = tmp_path / "nmap.xml"
-    artifact.write_text("<xml/>", encoding="utf-8")
+    artifact.write_text("<nmaprun></nmaprun>", encoding="utf-8")
 
     def boom(_path: Path) -> list[dict[str, str]]:
         raise ValueError("boom")
@@ -216,8 +254,49 @@ def test_map_defectdojo_environment_defaults_and_maps_values() -> None:
     assert rp._map_defectdojo_environment("unknown") == "Development"
 
 
+def test_build_final_run_metadata_uses_final_state() -> None:
+    ctx = _make_ctx(["192.168.56.10"])
+    state = _RecordingState("RUN-UNIT", Path("state"))
+    state.mark_started("inventory")
+    state.mark_complete("inventory", artifacts=["raw/inventory.json"])
+    state.mark_started("service_validation")
+    state.mark_complete("service_validation", artifacts=["raw/nmap.xml"])
+
+    metadata = rp._build_final_run_metadata(ctx, state, status="COMPLETED")
+
+    assert metadata["run_id"] == "RUN-UNIT"
+    assert metadata["status"] == "COMPLETED"
+    assert metadata["end_time"]
+    assert metadata["phases_completed"] == ["inventory", "service_validation"]
+    assert metadata["artifact_paths"] == ["raw/inventory.json", "raw/nmap.xml"]
+
+
+def test_build_defectdojo_generic_findings_outputs_flat_list() -> None:
+    findings = [
+        {
+            "title": "Open port 80",
+            "severity": "Low",
+            "composite_severity": "Medium",
+            "description": "Service exposed",
+            "endpoint": {"url": "http://192.168.56.10:80"},
+            "cve": None,
+            "remediation": "Close the port",
+            "tags": "nmap",
+        }
+    ]
+
+    payload = rp._build_defectdojo_generic_findings(findings)
+
+    assert isinstance(payload, list)
+    assert payload[0]["title"] == "Open port 80"
+    assert payload[0]["severity"] == "Medium"
+    assert payload[0]["references"] == '{"url": "http://192.168.56.10:80"}'
+    assert payload[0]["tags"] == ["nmap"]
+
+
 def test_main_dry_run_calls_gate_and_logging(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _make_ctx(["192.168.56.10"])
     profile_path = tmp_path / "profile.yml"
@@ -234,10 +313,13 @@ def test_main_dry_run_calls_gate_and_logging(
                 },
                 "phases": [],
             }
+
         if path.name == "tools.yml":
             return {"tool_defaults": {}}
+
         if path.name == "orchestrator.yml":
             return {}
+
         return {}
 
     def fake_run_gate(**kwargs: Any) -> Any:
@@ -259,7 +341,8 @@ def test_main_dry_run_calls_gate_and_logging(
 
 
 def test_main_skips_phase_for_disallowed_environment(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _make_ctx(["192.168.56.10"])
     profile_cfg = {
@@ -289,7 +372,8 @@ def test_main_skips_phase_for_disallowed_environment(
 
 
 def test_main_skips_targeted_runner_when_no_matching_targets(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _make_ctx(["192.168.56.10"])
     profile_cfg = {
@@ -331,7 +415,8 @@ def test_main_skips_targeted_runner_when_no_matching_targets(
 
 
 def test_main_fails_and_marks_phase_failed_when_runner_produces_no_artifacts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _make_ctx(["192.168.56.10"])
     profile_cfg = {
@@ -367,8 +452,106 @@ def test_main_fails_and_marks_phase_failed_when_runner_produces_no_artifacts(
     assert any(event[0] == "failed" and event[1] == "service_validation" for event in state.events)
 
 
+def test_main_indexes_final_opensearch_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ctx = _make_ctx(["192.168.56.10"])
+    profile_cfg = {
+        "run_profile": {
+            "name": "lab_poc",
+            "environment": "lab",
+        },
+        "phases": [
+            {
+                "name": "service_validation",
+                "enabled": True,
+                "runners": ["nmap"],
+            }
+        ],
+        "workflow": {
+            "deduplicate": False,
+            "import_defectdojo": False,
+            "create_tickets": False,
+            "index_opensearch": True,
+        },
+    }
+
+    profile_path = _patch_common(monkeypatch, tmp_path, profile_cfg, ctx)
+
+    class _ArtifactRunner:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        def run(self, _targets: list[str], out_dir: Path) -> list[Path]:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            artifact = out_dir / "nmap_RUN-UNIT.xml"
+            artifact.write_text("<nmaprun></nmaprun>", encoding="utf-8")
+            return [artifact]
+
+    class _FakeOpenSearchClient:
+        instances: list[_FakeOpenSearchClient] = []
+
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            self.findings_calls: list[dict[str, Any]] = []
+            self.metadata_calls: list[dict[str, Any]] = []
+            self.__class__.instances.append(self)
+
+        def health_check(self) -> bool:
+            return True
+
+        def index_findings(self, findings: list[dict[str, Any]], run_id: str) -> int:
+            self.findings_calls.append({"findings": findings, "run_id": run_id})
+            return len(findings)
+
+        def index_run_metadata(
+            self,
+            run_id: str,
+            metadata: dict[str, Any],
+            finding_count: int = 0,
+        ) -> None:
+            self.metadata_calls.append(
+                {
+                    "run_id": run_id,
+                    "metadata": metadata,
+                    "finding_count": finding_count,
+                }
+            )
+
+    monkeypatch.setattr(rp, "_runner_map", lambda: {"nmap": _ArtifactRunner})
+    monkeypatch.setattr(
+        rp,
+        "_parse_artifacts",
+        lambda _tool, _artifacts: [
+            {
+                "title": "Open port 80",
+                "severity": "Low",
+                "description": "Service exposed",
+                "endpoint": "http://192.168.56.10:80",
+                "tags": ["nmap"],
+            }
+        ],
+    )
+    monkeypatch.setattr(rp, "OpenSearchClient", _FakeOpenSearchClient)
+
+    assert rp.main(profile_path) == 0
+
+    client = _FakeOpenSearchClient.instances[-1]
+    assert client.findings_calls[0]["run_id"] == "RUN-UNIT"
+
+    metadata_call = client.metadata_calls[0]
+    assert metadata_call["run_id"] == "RUN-UNIT"
+    assert metadata_call["finding_count"] == 1
+    assert metadata_call["metadata"]["status"] == "COMPLETED"
+    assert metadata_call["metadata"]["end_time"]
+    assert metadata_call["metadata"]["phases_completed"] == ["service_validation"]
+    assert len(metadata_call["metadata"]["artifact_paths"]) == 1
+    assert metadata_call["metadata"]["artifact_paths"][0].endswith("nmap_RUN-UNIT.xml")
+
+
 def test_main_writes_defectdojo_payload_and_imports_results(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ctx = _make_ctx(["192.168.56.10"])
     profile_cfg = {
@@ -400,7 +583,7 @@ def test_main_writes_defectdojo_payload_and_imports_results(
         def run(self, _targets: list[str], out_dir: Path) -> list[Path]:
             out_dir.mkdir(parents=True, exist_ok=True)
             artifact = out_dir / "nmap_RUN-UNIT.xml"
-            artifact.write_text("<nmaprun/>", encoding="utf-8")
+            artifact.write_text("<nmaprun></nmaprun>", encoding="utf-8")
             return [artifact]
 
     class _FakeDojo:
@@ -432,7 +615,6 @@ def test_main_writes_defectdojo_payload_and_imports_results(
         ],
     )
     monkeypatch.setattr(rp, "DefectDojoClient", _FakeDojo)
-
     monkeypatch.setenv("DEFECTDOJO_URL", "http://localhost:8080")
     monkeypatch.setenv("DEFECTDOJO_TOKEN", "token")
 
@@ -442,11 +624,12 @@ def test_main_writes_defectdojo_payload_and_imports_results(
     assert import_file.exists()
 
     payload = json.loads(import_file.read_text(encoding="utf-8"))
-    assert payload["name"] == "Security Automation Pipeline"
-    assert len(payload["findings"]) == 1
-    assert payload["findings"][0]["title"] == "Open port 80"
-    assert payload["findings"][0]["tags"] == ["nmap"]
-    assert payload["findings"][0]["references"] == "http://192.168.56.10:80"
+
+    assert isinstance(payload, list)
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Open port 80"
+    assert payload[0]["tags"] == ["nmap"]
+    assert payload[0]["references"] == "http://192.168.56.10:80"
 
     dojo = _FakeDojo.instances[-1]
     assert dojo.url == "http://localhost:8080"

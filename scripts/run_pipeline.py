@@ -3,12 +3,6 @@
 
 Enforces governance gates, runs approved phases, normalizes results,
 and optionally pushes to DefectDojo + OpenSearch.
-
-Behavior:
-- No stub handling in the orchestrator.
-- Runner failures propagate honestly.
-- Empty artifact sets from executed runners are treated as failures.
-- ScoutSuite parsing is blocked until a real ScoutSuite parser is added.
 """
 
 from __future__ import annotations
@@ -18,6 +12,7 @@ import json
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 from datetime import date as _date
 from pathlib import Path
 from typing import Any
@@ -58,6 +53,7 @@ from src.runners.wazuh_runner import WazuhRunner  # noqa: E402
 from src.runners.zap_runner import ZapRunner  # noqa: E402
 from src.scoring.dedup import deduplicate  # noqa: E402
 from src.scoring.risk_scorer import score_batch  # noqa: E402
+from src.utils.env_loader import load_env_file  # noqa: E402
 from src.utils.hashing import hash_file  # noqa: E402
 from src.utils.logging_setup import setup_logging  # noqa: E402
 
@@ -110,9 +106,11 @@ def _dedupe_targets(targets: list[str]) -> list[str]:
         value = str(target).strip()
         if not value:
             continue
+
         key = value.lower()
         if key in seen:
             continue
+
         seen.add(key)
         unique.append(value)
 
@@ -133,33 +131,46 @@ def _collect_runner_targets(ctx: Any, runner_name: str) -> list[str]:
     return network_targets
 
 
-def _runner_should_skip_for_no_targets(runner_name: str, runner_targets: list[str]) -> bool:
+def _runner_should_skip_for_no_targets(
+    runner_name: str,
+    runner_targets: list[str],
+) -> bool:
     return runner_name in TARGETED_RUNNERS and not runner_targets
 
 
 def _parse_artifact(tool: str, artifact: Path) -> list[Any]:
     if tool == "nmap":
         return parse_nmap_xml(artifact)
+
     if tool == "greenbone":
         return parse_openvas_csv(artifact)
+
     if tool == "zap":
         return parse_zap_xml(artifact)
+
     if tool == "nikto":
         return parse_nikto_xml(artifact)
+
     if tool == "wazuh":
         findings = parse_wazuh_vulnerabilities(artifact)
         findings += parse_wazuh_sca(artifact)
         return findings
+
     if tool == "prowler":
         return parse_prowler_json(artifact)
+
     if tool == "lynis":
         return parse_lynis_dat(artifact)
+
     if tool == "nuclei":
         return parse_nuclei_jsonl(artifact)
+
     if tool == "inventory":
         return []
+
     if tool == "osquery":
         return []
+
     if tool == "scoutsuite":
         raise RunnerExecutionError(
             "ScoutSuite parsing is not implemented yet. "
@@ -218,10 +229,74 @@ def _map_defectdojo_environment(environment: str) -> str:
     return mapping.get(value, "Development")
 
 
+def _build_final_run_metadata(
+    ctx: Any,
+    state: RunState,
+    *,
+    status: str,
+) -> dict[str, Any]:
+    raw_metadata = ctx.run_metadata.to_dict()
+    metadata = dict(raw_metadata) if isinstance(raw_metadata, dict) else {}
+
+    phases_completed = state.get_completed_phases()
+    artifact_paths: list[str] = []
+
+    for phase_name in phases_completed:
+        artifact_paths.extend(state.get_artifacts(phase_name))
+
+    metadata.update(
+        {
+            "status": status,
+            "end_time": datetime.now(UTC).isoformat(),
+            "phases_completed": phases_completed,
+            "artifact_paths": artifact_paths,
+        }
+    )
+
+    return metadata
+
+
+def _build_defectdojo_generic_findings(
+    findings: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    dojo_findings: list[dict[str, Any]] = []
+
+    for finding in findings:
+        tags = finding.get("tags", [])
+        if not isinstance(tags, list):
+            tags = [str(tags)] if tags else []
+        else:
+            tags = [str(tag) for tag in tags if tag is not None]
+
+        references = finding.get("endpoint") or ""
+        if isinstance(references, (list, dict)):
+            references = json.dumps(references, default=str)
+        else:
+            references = str(references)
+
+        dojo_findings.append(
+            {
+                "title": str(finding.get("title", "")),
+                "severity": str(
+                    finding.get("composite_severity") or finding.get("severity", "Info")
+                ),
+                "description": str(finding.get("description", "")),
+                "date": _date.today().isoformat(),
+                "cve": str(finding.get("cve") or ""),
+                "mitigation": str(finding.get("remediation") or ""),
+                "references": references,
+                "tags": tags,
+            }
+        )
+
+    return dojo_findings
+
+
 def main(profile: Path, dry_run: bool = False) -> int:
+    load_env_file(ROOT / ".env", override=True)
+
     profile_cfg = _load_yaml(profile)
     run_profile = profile_cfg.get("run_profile", profile_cfg)
-
     workflow = str(run_profile.get("name", "lab_poc"))
     environment = str(run_profile.get("environment", "lab"))
 
@@ -244,6 +319,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
     run_id = ctx.run_metadata.run_id
     state = RunState(run_id=run_id, state_dir=ROOT / "evidence" / "state")
+
     raw_dir = ROOT / "evidence" / "raw" / run_id
     norm_dir = ROOT / "evidence" / "normalized" / run_id
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +332,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
             continue
 
         phase_name = str(phase["name"])
+
         if state.is_complete(phase_name):
             LOG.info("Skipping already-complete phase %s", phase_name)
             continue
@@ -265,17 +342,24 @@ def main(profile: Path, dry_run: bool = False) -> int:
         allowed_envs = phase.get("allowed_environments")
         if allowed_envs and environment not in allowed_envs:
             state.mark_skipped(phase_name, f"env '{environment}' not in {allowed_envs}")
-            LOG.info("Skipping phase %s: env '%s' not in %s", phase_name, environment, allowed_envs)
+            LOG.info(
+                "Skipping phase %s: env '%s' not in %s",
+                phase_name,
+                environment,
+                allowed_envs,
+            )
             continue
 
         phase_out = raw_dir / phase_name
         phase_out.mkdir(parents=True, exist_ok=True)
+
         artifacts_all: list[str] = []
 
         try:
             for runner_name in phase.get("runners", []):
                 runner_name_str = str(runner_name)
                 runner_cls = _runner_map().get(runner_name_str)
+
                 if runner_cls is None:
                     raise RunnerExecutionError(
                         f"Unknown runner: {runner_name_str}",
@@ -284,9 +368,13 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
                 runner = runner_cls(ctx, tools_cfg)
                 out_dir = phase_out / runner_name_str
+
                 runner_targets = _collect_runner_targets(ctx, runner_name_str)
 
-                if _runner_should_skip_for_no_targets(runner_name_str, runner_targets):
+                if _runner_should_skip_for_no_targets(
+                    runner_name_str,
+                    runner_targets,
+                ):
                     LOG.info(
                         "Skipping runner %s in phase %s because there are no applicable targets",
                         runner_name_str,
@@ -358,11 +446,12 @@ def main(profile: Path, dry_run: bool = False) -> int:
                 os.environ.get("OPENSEARCH_PASSWORD", "admin"),
             ),
         )
+
         if client.health_check():
             client.index_findings(scored, run_id=run_id)
             client.index_run_metadata(
                 run_id,
-                ctx.run_metadata.to_dict(),
+                _build_final_run_metadata(ctx, state, status="COMPLETED"),
                 finding_count=len(scored),
             )
 
@@ -374,40 +463,11 @@ def main(profile: Path, dry_run: bool = False) -> int:
             dojo = DefectDojoClient(dojo_url, dojo_token)
             import_file = norm_dir / "generic_findings.json"
 
-            dojo_findings: list[dict[str, Any]] = []
-            for finding in scored:
-                tags = finding.get("tags", [])
-                if not isinstance(tags, list):
-                    tags = [str(tags)] if tags else []
-                else:
-                    tags = [str(tag) for tag in tags if tag is not None]
-
-                references = finding.get("endpoint") or ""
-                if isinstance(references, (list, dict)):
-                    references = json.dumps(references, default=str)
-                else:
-                    references = str(references)
-
-                dojo_findings.append(
-                    {
-                        "title": str(finding.get("title", "")),
-                        "severity": str(
-                            finding.get("composite_severity") or finding.get("severity", "Info")
-                        ),
-                        "description": str(finding.get("description", "")),
-                        "date": _date.today().isoformat(),
-                        "cve": str(finding.get("cve") or ""),
-                        "mitigation": str(finding.get("remediation") or ""),
-                        "references": references,
-                        "tags": tags,
-                    }
-                )
-
-            payload = {
-                "name": "Security Automation Pipeline",
-                "findings": dojo_findings,
-            }
-            import_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            dojo_findings = _build_defectdojo_generic_findings(scored)
+            import_file.write_text(
+                json.dumps(dojo_findings, indent=2, default=str),
+                encoding="utf-8",
+            )
 
             dojo_environment = _map_defectdojo_environment(environment)
             dojo.import_tool_results(
@@ -427,13 +487,14 @@ def cli() -> None:
     parser.add_argument(
         "--profile",
         default="config/profiles/lab_poc.yml",
-        help="Path to workflow profile YAML (relative to project root)",
+        help="Path to workflow profile YAML relative to project root",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Validate governance gate only",
     )
+
     args = parser.parse_args()
     raise SystemExit(main(profile=ROOT / args.profile, dry_run=args.dry_run))
 
