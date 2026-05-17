@@ -15,13 +15,18 @@ nikto:
   timeout_per_host: 300
   global_timeout: 3600
 
+lynis:
+  mode: local
+  executable: lynis
+  global_timeout: 1800
+
 phases:
   - name: inventory
     enabled: true
     runners: [inventory, osquery]
 
   - name: service_validation
-    enabled: true
+    enabled: false
     runners: [nmap]
 
   - name: authenticated_vuln
@@ -33,7 +38,7 @@ phases:
     runners: [lynis]
 
   - name: web_checks
-    enabled: true # false  Only enable if you have the resources to run these checks
+    enabled: false 
     allowed_environments: [staging, lab]
     runners: [zap, nikto, nuclei] #zap, nikto, 
 
