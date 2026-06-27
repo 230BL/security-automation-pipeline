@@ -37,6 +37,7 @@ def verify_scope_signature(
     try:
         result = subprocess.run(
             [
+                gpg_exe,                  
                 "--no-default-keyring",
                 "--keyring",
                 str(keyring_path),
@@ -48,7 +49,6 @@ def verify_scope_signature(
             text=True,
             shell=False,
             timeout=30,
-            executable=gpg_exe,
         )
     except subprocess.TimeoutExpired as exc:
         raise ScopeSignatureError(
