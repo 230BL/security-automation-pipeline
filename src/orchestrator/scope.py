@@ -37,7 +37,7 @@ def verify_scope_signature(
     try:
         result = subprocess.run(
             [
-                gpg_exe,                  
+                gpg_exe,
                 "--no-default-keyring",
                 "--keyring",
                 str(keyring_path),
