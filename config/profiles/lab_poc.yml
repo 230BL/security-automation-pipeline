@@ -33,7 +33,7 @@ phases:
   - nmap
 
 - name: authenticated_vuln
-  enabled: false
+  enabled: true
   runners:
   - greenbone
 

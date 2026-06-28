@@ -262,32 +262,42 @@ def _build_defectdojo_generic_findings(
     dojo_findings: list[dict[str, Any]] = []
 
     for finding in findings:
-        tags = finding.get("tags", [])
-        if not isinstance(tags, list):
-            tags = [str(tags)] if tags else []
-        else:
-            tags = [str(tag) for tag in tags if tag is not None]
+        severity = str(finding.get("composite_severity") or finding.get("severity", "Info"))
+        dojo_finding: dict[str, Any] = {
+            "title": str(finding.get("title", "")),
+            "severity": severity,
+            "description": str(finding.get("description", "")),
+            "date": _date.today().isoformat(),
+        }
 
-        references = finding.get("endpoint") or ""
-        if isinstance(references, (list, dict)):
-            references = json.dumps(references, default=str)
-        else:
-            references = str(references)
+        mitigation = str(finding.get("remediation") or "").strip()
+        if mitigation:
+            dojo_finding["mitigation"] = mitigation
 
-        dojo_findings.append(
-            {
-                "title": str(finding.get("title", "")),
-                "severity": str(
-                    finding.get("composite_severity") or finding.get("severity", "Info")
-                ),
-                "description": str(finding.get("description", "")),
-                "date": _date.today().isoformat(),
-                "cve": str(finding.get("cve") or ""),
-                "mitigation": str(finding.get("remediation") or ""),
-                "references": references,
-                "tags": tags,
-            }
-        )
+        endpoint = finding.get("endpoint")
+        if endpoint:
+            if isinstance(endpoint, (list, dict)):
+                dojo_finding["references"] = json.dumps(endpoint, default=str)
+            else:
+                ref = str(endpoint).strip()
+                if ref:
+                    dojo_finding["references"] = ref
+
+        cve = finding.get("cve")
+        if cve and str(cve).strip().upper().startswith("CVE-"):
+            dojo_finding["cve"] = str(cve).strip()
+
+        raw_tags = finding.get("tags", [])
+        if isinstance(raw_tags, list):
+            tags = [str(t) for t in raw_tags if t is not None and str(t).strip()]
+        elif raw_tags:
+            tags = [str(raw_tags).strip()]
+        else:
+            tags = []
+        if tags:
+            dojo_finding["tags"] = tags
+
+        dojo_findings.append(dojo_finding)
 
     return dojo_findings
 
@@ -465,7 +475,7 @@ def main(profile: Path, dry_run: bool = False) -> int:
 
             dojo_findings = _build_defectdojo_generic_findings(scored)
             import_file.write_text(
-                json.dumps(dojo_findings, indent=2, default=str),
+                json.dumps({"findings": dojo_findings}, indent=2, default=str),
                 encoding="utf-8",
             )
 
